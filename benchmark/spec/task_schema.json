@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aerowam.org/schema/task-v0.1.json",
+  "title": "AeroWAM-Duo task specification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "family",
+    "template",
+    "language_instruction",
+    "episode_horizon",
+    "control_hz",
+    "agents",
+    "observation_contract",
+    "action_contract",
+    "communication_contract",
+    "hidden_events",
+    "evaluation",
+    "split"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+    },
+    "family": {
+      "type": "string",
+      "enum": ["joint_inspection", "observation_handoff", "search_verify"]
+    },
+    "template": { "type": "string", "minLength": 1 },
+    "language_instruction": { "type": "string", "minLength": 1 },
+    "episode_horizon": { "type": "integer", "minimum": 1 },
+    "control_hz": { "type": "number", "exclusiveMinimum": 0 },
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["map_id", "target_instance_ids", "distractor_instance_ids", "occlusion_layout_id"],
+      "properties": {
+        "map_id": { "type": "string" },
+        "target_instance_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "distractor_instance_ids": { "type": "array", "items": { "type": "string" } },
+        "occlusion_layout_id": { "type": "string" },
+        "dynamic_target": { "type": "boolean", "default": false },
+        "domain_randomization": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "agents": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["agent_id", "platform", "role_mode"],
+        "properties": {
+          "agent_id": { "type": "string", "enum": ["uav_0", "uav_1"] },
+          "platform": { "type": "string" },
+          "role_mode": { "type": "string", "enum": ["adaptive", "fixed", "diagnostic_oracle"] },
+          "fixed_role": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "observation_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rgb", "own_state", "shared_state", "prohibited_fields"],
+      "properties": {
+        "rgb": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["width", "height", "channels", "encoding"],
+          "properties": {
+            "width": { "type": "integer", "minimum": 1 },
+            "height": { "type": "integer", "minimum": 1 },
+            "channels": { "const": 3 },
+            "encoding": { "type": "string", "enum": ["jpeg", "png", "raw_uint8"] }
+          }
+        },
+        "own_state": { "type": "array", "items": { "type": "string" } },
+        "shared_state": { "type": "array", "items": { "type": "string" } },
+        "prohibited_fields": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      }
+    },
+    "action_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["control_frame", "dimensions", "bounds", "action_horizon"],
+      "properties": {
+        "control_frame": { "type": "string", "enum": ["body_velocity_yaw_rate", "world_velocity_yaw_rate", "waypoint_4dof"] },
+        "dimensions": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+      "bounds": {
+        "type": "object",
+        "additionalProperties": { "type": "number" },
+        "properties": {
+          "vx": { "maximum": 3, "minimum": 0 },
+          "vy": { "maximum": 3, "minimum": 0 },
+          "vz": { "maximum": 1.5, "minimum": 0 },
+          "yaw_rate": { "maximum": 1, "minimum": 0 }
+        }
+      },
+        "action_horizon": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "communication_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "message_schema", "bandwidth_bytes_per_second", "latency_ms", "drop_probability"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "message_schema": { "type": "string", "enum": ["none", "free_text", "discrete_intent", "structured_json"] },
+        "bandwidth_bytes_per_second": { "type": "integer", "minimum": 0 },
+        "latency_ms": { "type": "number", "minimum": 0 },
+        "drop_probability": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "hidden_events": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["coverage", "pre_position", "handoff", "verify", "collision", "timeout"]
+      },
+      "minItems": 1
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary_metrics", "secondary_metrics", "success_predicate"],
+      "properties": {
+        "primary_metrics": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "secondary_metrics": { "type": "array", "items": { "type": "string" } },
+        "success_predicate": { "type": "string", "minLength": 1 }
+      }
+    },
+    "split": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "map_ids", "target_instance_ids", "occlusion_layout_ids", "allowed_for_training"],
+      "properties": {
+        "name": { "type": "string", "enum": ["source_train", "source_validation", "target_zero_shot", "target_few_shot", "real_reference"] },
+        "map_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "target_instance_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "occlusion_layout_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "allowed_for_training": { "type": "boolean" }
+      }
+    }
+  }
+}

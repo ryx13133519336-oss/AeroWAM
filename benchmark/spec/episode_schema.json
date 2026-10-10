@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aerowam.org/schema/episode-v0.1.json",
+  "title": "AeroWAM-Duo episode log",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "episode_id", "task_id", "split", "seed", "agent_ids", "steps", "outcome"],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "episode_id": { "type": "string", "minLength": 1 },
+    "task_id": { "type": "string", "minLength": 1 },
+    "split": { "type": "string" },
+    "seed": { "type": "integer", "minimum": 0 },
+    "agent_ids": { "type": "array", "items": { "type": "string", "enum": ["uav_0", "uav_1"] }, "minItems": 2, "maxItems": 2, "uniqueItems": true },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["simulator", "version", "map_id", "reset_hash"],
+      "properties": {
+        "simulator": { "type": "string", "enum": ["px4_gazebo", "mock", "airsim", "traveluav", "real"] },
+        "version": { "type": "string" },
+        "map_id": { "type": "string" },
+        "reset_hash": { "type": "string" },
+        "ros_distro": { "type": "string" },
+        "vehicle_namespaces": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["uav_0", "uav_1"] },
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true
+        },
+        "transport": { "type": "string", "enum": ["px4_uxrce_dds", "mavlink", "unknown"] },
+        "control_hz": { "type": "number", "exclusiveMinimum": 0 },
+        "setpoint_hz": { "type": "number", "exclusiveMinimum": 0 },
+        "camera": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "width": { "type": "integer", "minimum": 1 },
+            "height": { "type": "integer", "minimum": 1 },
+            "encoding": { "type": "string", "enum": ["jpeg", "png", "raw_uint8"] },
+            "topic_template": { "type": "string" }
+          }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["t", "timestamp_ms", "observations", "actions", "communication", "events"],
+        "properties": {
+          "t": { "type": "integer", "minimum": 0 },
+          "timestamp_ms": { "type": "integer", "minimum": 0 },
+          "observations": {
+            "type": "object",
+            "required": ["uav_0", "uav_1"],
+            "additionalProperties": false,
+            "properties": {
+              "uav_0": { "$ref": "#/$defs/observation" },
+              "uav_1": { "$ref": "#/$defs/observation" }
+            }
+          },
+          "actions": {
+            "type": "object",
+            "required": ["uav_0", "uav_1"],
+            "additionalProperties": false,
+            "properties": {
+              "uav_0": { "$ref": "#/$defs/action" },
+              "uav_1": { "$ref": "#/$defs/action" }
+            }
+          },
+          "communication": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["messages", "bytes_sent", "dropped"],
+            "properties": {
+              "messages": { "type": "array", "items": { "$ref": "#/$defs/message" } },
+              "bytes_sent": { "type": "integer", "minimum": 0 },
+              "dropped": { "type": "boolean" }
+            }
+          },
+          "events": { "type": "array", "items": { "$ref": "#/$defs/event" } },
+          "truth": { "$ref": "#/$defs/hidden_truth" }
+        }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terminated", "termination_reason", "success", "metrics"],
+      "properties": {
+        "terminated": { "type": "boolean" },
+        "termination_reason": { "type": "string", "enum": ["success", "timeout", "collision", "safety_abort", "simulator_error"] },
+        "success": { "type": "boolean" },
+        "metrics": { "type": "object", "additionalProperties": { "type": "number" } }
+      }
+    }
+  },
+  "$defs": {
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rgb_uri", "own_state", "health"],
+      "properties": {
+        "rgb_uri": { "type": "string", "minLength": 1 },
+        "own_state": { "type": "array", "items": { "type": "number" } },
+        "health": { "type": "string", "enum": ["ok", "degraded", "lost"] },
+        "last_message": { "type": ["string", "object", "null"] }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["control", "valid"],
+      "properties": {
+        "control": { "type": "array", "items": { "type": "number" } },
+        "valid": { "type": "boolean" }
+      }
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sender", "receiver", "payload", "sent_timestamp_ms", "deliver_timestamp_ms"],
+      "properties": {
+        "sender": { "type": "string", "enum": ["uav_0", "uav_1"] },
+        "receiver": { "type": "string", "enum": ["uav_0", "uav_1", "broadcast"] },
+        "payload": { "type": ["string", "object", "null"] },
+        "sent_timestamp_ms": { "type": "integer", "minimum": 0 },
+        "deliver_timestamp_ms": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_type", "agent_ids", "start_t", "end_t", "success"],
+      "properties": {
+        "event_type": { "type": "string", "enum": ["coverage", "pre_position", "handoff", "verify", "collision", "timeout"] },
+        "agent_ids": { "type": "array", "items": { "type": "string", "enum": ["uav_0", "uav_1"] }, "minItems": 1 },
+        "start_t": { "type": "integer", "minimum": 0 },
+        "end_t": { "type": "integer", "minimum": 0 },
+        "success": { "type": "boolean" },
+        "attributes": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "hidden_truth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target_pose": { "type": "array", "items": { "type": "number" } },
+        "target_visible_to": { "type": "array", "items": { "type": "string", "enum": ["uav_0", "uav_1"] } },
+        "target_identity": { "type": ["string", "null"] },
+        "collision": { "type": "boolean" }
+      }
+    }
+  }
+}

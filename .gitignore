@@ -1,0 +1,47 @@
+# Python and local environments
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Editors and local machine files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ROS, PX4, Gazebo and runtime logs
+*.log
+*.bag
+*.db3
+.ros/
+.gz/
+build/
+install/
+log/
+px4_logs/
+gazebo_gui.log
+
+# Generated ML artifacts and datasets
+*.pt
+*.pth
+*.ckpt
+*.onnx
+checkpoints/
+features/
+datasets/
+episodes/
+oracle_results*/
+model_handoff_dataset*/
+model_handoff_smoke*/
+model_handoff_test*/
+
+# Local experiment output
+.attempts/
+results/
+outputs/

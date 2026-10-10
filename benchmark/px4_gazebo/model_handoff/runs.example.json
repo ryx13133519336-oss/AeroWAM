@@ -1,0 +1,11 @@
+[
+  {"method": "joint_bc", "training_seed": 0, "checkpoint": "/mnt/d/AeroWAM-data/checkpoints/joint_bc_seed_0.pt"},
+  {"method": "joint_bc", "training_seed": 1, "checkpoint": "/mnt/d/AeroWAM-data/checkpoints/joint_bc_seed_1.pt"},
+  {"method": "joint_bc", "training_seed": 2, "checkpoint": "/mnt/d/AeroWAM-data/checkpoints/joint_bc_seed_2.pt"},
+  {"method": "dual_vln_hier", "training_seed": 0, "checkpoint": "/mnt/d/AeroWAM-data/checkpoints/dual_vln_hier_seed_0.pt"},
+  {"method": "dual_vln_hier", "training_seed": 1, "checkpoint": "/mnt/d/AeroWAM-data/checkpoints/dual_vln_hier_seed_1.pt"},
+  {"method": "dual_vln_hier", "training_seed": 2, "checkpoint": "/mnt/d/AeroWAM-data/checkpoints/dual_vln_hier_seed_2.pt"},
+  {"method": "dual_wam_mpc", "training_seed": 0, "checkpoint": "/mnt/d/AeroWAM-data/checkpoints/dual_wam_mpc_seed_0.pt"},
+  {"method": "dual_wam_mpc", "training_seed": 1, "checkpoint": "/mnt/d/AeroWAM-data/checkpoints/dual_wam_mpc_seed_1.pt"},
+  {"method": "dual_wam_mpc", "training_seed": 2, "checkpoint": "/mnt/d/AeroWAM-data/checkpoints/dual_wam_mpc_seed_2.pt"}
+]

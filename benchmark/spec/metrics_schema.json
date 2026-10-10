@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aerowam.org/schema/metrics-v0.1.json",
+  "title": "AeroWAM-Duo benchmark result summary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "method", "split", "num_episodes", "aggregate", "per_task"],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "method": { "type": "string", "minLength": 1 },
+    "method_family": { "type": "string", "enum": ["random", "single_uav", "fixed_role", "joint_planner", "direct_visual", "wam", "privileged_oracle"] },
+    "split": { "type": "string" },
+    "num_episodes": { "type": "integer", "minimum": 1 },
+    "seeds": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "uniqueItems": true },
+    "aggregate": { "$ref": "#/$defs/metric_record" },
+    "per_task": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task_id", "num_episodes", "metrics"],
+        "properties": {
+          "task_id": { "type": "string" },
+          "num_episodes": { "type": "integer", "minimum": 1 },
+          "metrics": { "$ref": "#/$defs/metric_record" }
+        }
+      }
+    },
+    "transfer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "demonstrations": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+        "sr_at_n": { "type": "array", "items": { "$ref": "#/$defs/scalar_with_ci" } },
+        "auc": { "$ref": "#/$defs/scalar_with_ci" },
+        "forward_transfer": { "$ref": "#/$defs/scalar_with_ci" },
+        "backward_transfer": { "$ref": "#/$defs/scalar_with_ci" },
+        "source_forgetting": { "$ref": "#/$defs/scalar_with_ci" }
+      }
+    },
+    "reproducibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "config_hash": { "type": "string" },
+        "checkpoint_hash": { "type": "string" },
+        "environment_hash": { "type": "string" },
+        "evaluator_version": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "scalar_with_ci": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value"],
+      "properties": {
+        "value": { "type": "number" },
+        "lower": { "type": "number" },
+        "upper": { "type": "number" },
+        "n": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "metric_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_success", "coverage", "handoff", "search_verify", "safety_cost", "cooperation_gain"],
+      "properties": {
+        "task_success": { "$ref": "#/$defs/scalar_with_ci" },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "clear_coverage": { "$ref": "#/$defs/scalar_with_ci" },
+            "inspection_accuracy": { "$ref": "#/$defs/scalar_with_ci" },
+            "image_quality": { "$ref": "#/$defs/scalar_with_ci" }
+          }
+        },
+        "handoff": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "visible_fraction": { "$ref": "#/$defs/scalar_with_ci" },
+            "longest_interruption_steps": { "$ref": "#/$defs/scalar_with_ci" },
+            "latency_steps": { "$ref": "#/$defs/scalar_with_ci" },
+            "identity_error_rate": { "$ref": "#/$defs/scalar_with_ci" }
+          }
+        },
+        "search_verify": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "confirmation_success": { "$ref": "#/$defs/scalar_with_ci" },
+            "false_positive_rate": { "$ref": "#/$defs/scalar_with_ci" },
+            "completion_steps": { "$ref": "#/$defs/scalar_with_ci" }
+          }
+        },
+        "safety_cost": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "collision_rate": { "$ref": "#/$defs/scalar_with_ci" },
+            "flight_steps": { "$ref": "#/$defs/scalar_with_ci" },
+            "path_length": { "$ref": "#/$defs/scalar_with_ci" },
+            "energy_proxy": { "$ref": "#/$defs/scalar_with_ci" },
+            "communication_bytes": { "$ref": "#/$defs/scalar_with_ci" }
+          }
+        },
+        "cooperation_gain": { "$ref": "#/$defs/scalar_with_ci" },
+        "wam": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "candidate_rank_success": { "$ref": "#/$defs/scalar_with_ci" },
+            "latent_prediction_error": { "$ref": "#/$defs/scalar_with_ci" },
+            "closed_loop_success": { "$ref": "#/$defs/scalar_with_ci" },
+            "inference_latency_ms": { "$ref": "#/$defs/scalar_with_ci" }
+          }
+        }
+      }
+    }
+  }
+}

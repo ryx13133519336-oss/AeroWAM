@@ -1466,6 +1466,23 @@ def main() -> None:
                     intent = "handoff"
             return ModelJointAction(waypoints["uav_0"], waypoints["uav_1"], intent)
 
+        @staticmethod
+        def _dataset_record_step(
+            decision_step: bool, requested: JointAction
+        ) -> bool:
+            """Record ordinary 2 Hz rows and expert protocol-decision rows."""
+            if decision_step:
+                return True
+            message = requested.message
+            if not isinstance(message, Mapping):
+                return False
+            payload = message.get("payload", message)
+            if not isinstance(payload, Mapping):
+                return False
+            return str(payload.get("intent", "")) in {
+                "handoff_request", "confirm",
+            }
+
         def _apply_oracle_perturbation(self, requested: JointAction, decision_step: bool) -> JointAction:
             if args.policy != "oracle" or fixture is None:
                 return requested
@@ -1525,6 +1542,7 @@ def main() -> None:
                 common_positions, self.vehicles["uav_0"].initial_yaw
             )
             decision_step = self.protocol.t % self._model_decision_stride == 0
+            record_step = decision_step
             policy_metadata: dict[str, Any] | None = None
             dataset_observation: ModelObservation | None = None
             dataset_label: ModelJointAction | None = None
@@ -1597,7 +1615,8 @@ def main() -> None:
                         "UAV0 TRACKING ESTABLISHED: following target on the near side"
                     )
                     self._reported_uav0_tracking_ready = True
-                if decision_step and self.dataset_writer is not None:
+                record_step = self._dataset_record_step(decision_step, requested)
+                if record_step and self.dataset_writer is not None:
                     try:
                         dataset_observation = self._capture_model_observation(observations)
                     except (RuntimeError, ValueError) as exc:
@@ -1612,7 +1631,7 @@ def main() -> None:
                 unperturbed_requested = self._planning_action_to_vehicle_body(
                     unperturbed_requested
                 )
-                if decision_step and self.dataset_writer is not None:
+                if record_step and self.dataset_writer is not None:
                     dataset_label = self._waypoint_label(unperturbed_requested)
             limited_actions: dict[str, Action] = {}
             for agent_id in AGENT_IDS:
@@ -1651,7 +1670,7 @@ def main() -> None:
                 observations, evaluation_positions, joint_action,
                 policy_metadata=policy_metadata,
             )
-            if self.dataset_writer is not None and decision_step and dataset_observation is not None:
+            if self.dataset_writer is not None and record_step and dataset_observation is not None:
                 if dataset_label is None:
                     dataset_label = self._waypoint_label(joint_action)
                 if args.policy != "model" and any(

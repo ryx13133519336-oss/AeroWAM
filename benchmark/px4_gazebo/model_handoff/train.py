@@ -46,12 +46,38 @@ def _to_device(batch: Mapping[str, Any], device: Any) -> dict[str, Any]:
     return {key: value.to(device) if hasattr(value, "to") else value for key, value in batch.items()}
 
 
-def _loss(model: Any, batch: Mapping[str, Any], method: str) -> Any:
+def class_weights(labels: Any, num_classes: int, device: Any, max_weight: float = 12.0) -> Any:
+    import torch
+
+    counts = torch.bincount(labels.to(torch.long), minlength=num_classes).float()
+    weights = torch.ones(num_classes, dtype=torch.float32)
+    present = counts > 0
+    weights[present] = torch.sqrt(
+        counts.sum() / counts[present]
+    ).clamp(max=max_weight)
+    return weights.to(device)
+
+
+def _loss(
+    model: Any,
+    batch: Mapping[str, Any],
+    method: str,
+    intent_weight: Any = None,
+    phase_weight: Any = None,
+) -> Any:
     import torch.nn.functional as functional
     output = model(batch)
     total = functional.smooth_l1_loss(output["action"], batch["action"])
-    total = total + 0.25 * functional.cross_entropy(output["intent_logits"], batch["intent"])
-    total = total + 0.15 * functional.cross_entropy(output["phase_logits"], batch["phase"])
+    total = total + 0.25 * functional.cross_entropy(
+        output["intent_logits"],
+        batch["intent"],
+        weight=intent_weight,
+    )
+    total = total + 0.15 * functional.cross_entropy(
+        output["phase_logits"],
+        batch["phase"],
+        weight=phase_weight,
+    )
     if method == "dual_wam_mpc":
         next_batch = {
             "visual": torch_cat_history(batch["visual"], batch["next_visual"]),
@@ -72,13 +98,26 @@ def torch_cat_history(history: Any, current: Any) -> Any:
     return torch.cat((history[:, 1:], current.unsqueeze(1)), dim=1)
 
 
-def evaluate(model: Any, loader: Any, device: Any, method: str) -> float:
+def evaluate(
+    model: Any,
+    loader: Any,
+    device: Any,
+    method: str,
+    intent_weight: Any,
+    phase_weight: Any,
+) -> float:
     import torch
     model.eval()
     losses = []
     with torch.inference_mode():
         for batch in loader:
-            losses.append(float(_loss(model, _to_device(batch, device), method).item()))
+            losses.append(float(_loss(
+                model,
+                _to_device(batch, device),
+                method,
+                intent_weight,
+                phase_weight,
+            ).item()))
     model.train()
     return sum(losses) / max(1, len(losses))
 
@@ -116,6 +155,10 @@ def main() -> None:
         raise RuntimeError(f"trainable parameter budget exceeded: {count:,}")
     train_loader = torch.utils.data.DataLoader(FeatureSequenceDataset(train_cache), batch_size=args.batch_size, shuffle=True, drop_last=False)
     val_loader = torch.utils.data.DataLoader(FeatureSequenceDataset(val_cache), batch_size=args.batch_size, shuffle=False)
+    intent_weight = class_weights(train_cache["intent"], 3, device)
+    phase_weight = class_weights(train_cache["phase"], 4, device)
+    print(f"intent_weight={intent_weight.detach().cpu().tolist()}", flush=True)
+    print(f"phase_weight={phase_weight.detach().cpu().tolist()}", flush=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
     iterator = iter(train_loader)
     best_loss = float("inf")
@@ -128,12 +171,19 @@ def main() -> None:
             batch = next(iterator)
         batch = _to_device(batch, device)
         optimizer.zero_grad(set_to_none=True)
-        loss = _loss(model, batch, args.method)
+        loss = _loss(model, batch, args.method, intent_weight, phase_weight)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         if step % 500 == 0 or step == args.steps:
-            validation_loss = evaluate(model, val_loader, device, args.method)
+            validation_loss = evaluate(
+                model,
+                val_loader,
+                device,
+                args.method,
+                intent_weight,
+                phase_weight,
+            )
             print(f"step={step} train_loss={loss.item():.6f} validation_loss={validation_loss:.6f}", flush=True)
             if validation_loss < best_loss:
                 best_loss = validation_loss

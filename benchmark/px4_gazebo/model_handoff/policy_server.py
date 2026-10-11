@@ -79,6 +79,10 @@ class InferencePolicy:
         waypoints = {agent: [normalized[index][axis] * limits[axis] for axis in range(4)] for index, agent in enumerate(AGENT_IDS)}
         return ModelJointAction.from_wire({"waypoints": waypoints, "intent": INTENTS[intent_index]}).to_wire()
 
+class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
 
 class _Handler(socketserver.BaseRequestHandler):
     def handle(self) -> None:
@@ -102,9 +106,7 @@ def main() -> None:
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
     policy = InferencePolicy(args.checkpoint, device=args.device)
-    with socketserver.ThreadingTCPServer((args.host, args.port), _Handler) as server:
-        server.daemon_threads = True
-        server.allow_reuse_address = True
+    with ReusableThreadingTCPServer((args.host, args.port), _Handler) as server:
         server.policy = policy  # type: ignore[attr-defined]
         print(f"serving {policy.config.method} on {args.host}:{args.port}", flush=True)
         server.serve_forever()

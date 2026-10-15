@@ -1,0 +1,14 @@
+{
+  "schema_version": "0.1",
+  "family": "observation_handoff",
+  "task_id": "dual_search_handoff_verify_v1",
+  "template": "search_to_occluded_handoff",
+  "episode_horizon": 160,
+  "control_hz": 10,
+  "communication_contract": {"enabled": true, "message_schema": "structured_json", "bandwidth_bytes_per_second": 256, "latency_ms": 0, "drop_probability": 0},
+  "stage_graph": ["search", "pre_position", "handoff", "verify"],
+  "primary_metrics": ["task_success", "handoff_success", "confirmation_success"],
+  "secondary_metrics": ["completion_steps", "communication_bytes", "collision_rate"],
+  "failure_conditions": ["collision", "timeout", "handoff_gap", "false_confirmation", "link_outage"],
+  "splits": {"source_train": [0, 1, 2, 3, 4], "source_validation": [100, 101], "target_zero_shot": [200, 201], "target_few_shot": [300, 301]}
+}

@@ -50,6 +50,23 @@ class MyTask:
     def episode_record(self): ...
 ```
 
+任务实现放在 `benchmark/px4_gazebo/tasks/<family>/` 下，并在组合入口显式注册 factory：
+
+```python
+from benchmark.px4_gazebo.task_registry import register_task
+from benchmark.px4_gazebo.tasks.my_task.task import MyTask
+
+register_task("my_task_v1", lambda task_spec: MyTask(task_spec=task_spec))
+```
+
+runner 通过同一个入口创建任务，不需要导入或遍历其他任务族：
+
+```python
+from benchmark.px4_gazebo.task_registry import create_task
+
+task = create_task("my_task_v1", task_spec)
+```
+
 `reset` 和 `step` 返回给策略的 observation 不得包含 truth。任务特有的成功条件和指标放进 evaluator；公共指标保持一致，例如 `task_success`、碰撞、路径长度、通信字节和完成步数。
 
 ## 交接前验收

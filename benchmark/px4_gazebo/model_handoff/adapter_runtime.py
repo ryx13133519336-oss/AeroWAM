@@ -198,12 +198,18 @@ class RegisteredHandler(socketserver.BaseRequestHandler):
         returned = acquired = entered_runtime = False
         try:
             acquired = self.server.policy.exchange_lock.acquire(blocking=False)
-            if not acquired:
-                raise RuntimeError("Adapter exchange busy; request rejected, not queued")
             size = struct.unpack("!I", _receive_exact(self.request, 4, deadline))[0]
             if size > 16_000_000:
                 raise ValueError("Request exceeds 16 MB")
-            payload = _load(_receive_exact(self.request, size, deadline))
+            raw = _receive_exact(self.request, size, deadline)
+            # Decide admission once, before receiving. For a refused exchange,
+            # consume its bounded frame before sending the error: closing with
+            # unread input can reset TCP and discard the busy response on Windows.
+            # This never waits for the backend lock or admits a formerly busy
+            # request after that lock becomes free; the same 400ms deadline holds.
+            if not acquired:
+                raise RuntimeError("Adapter exchange busy; request rejected, not queued")
+            payload = _load(raw)
             entered_runtime = True
             result = self.server.policy(payload, deadline=deadline)
             returned = True

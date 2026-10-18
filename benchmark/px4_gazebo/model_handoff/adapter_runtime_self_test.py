@@ -259,6 +259,82 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(client.infer(_observation())[0], ModelJointAction())
         self.assertEqual(runtime._module.CALLS, 1)
 
+    def test_busy_frame_is_consumed_before_error_send_not_reset(self):
+        runtime = self.runtime()
+        raw = _observation().canonical_bytes()
+        class ResetOnUnreadSocket:
+            def __init__(self):
+                self.data = struct.pack("!I", len(raw)) + raw
+                self.sent = None
+            def settimeout(self, value):
+                self.timeout = value
+            def recv(self, size):
+                result, self.data = self.data[:size], self.data[size:]
+                return result
+            def sendall(self, value):
+                if self.data:
+                    raise ConnectionAbortedError("synthetic reset: unread request frame")
+                self.sent = value
+        connection = ResetOnUnreadSocket()
+        runtime.exchange_lock.acquire()
+        try:
+            RegisteredHandler(connection, ("127.0.0.1", 1), types.SimpleNamespace(policy=runtime))
+            self.assertTrue(runtime.exchange_lock.locked())
+        finally:
+            runtime.exchange_lock.release()
+        self.assertIsNotNone(connection.sent)
+        self.assertIn("busy", json.loads(connection.sent[4:])["message"])
+        self.assertLessEqual(connection.timeout, .4)
+        self.assertEqual(runtime._module.CALLS, 0)
+        self.assertFalse(runtime.faulted)
+
+    def test_busy_admission_is_not_reconsidered_when_lock_frees_during_receive(self):
+        runtime = self.runtime()
+        raw = _observation().canonical_bytes()
+        class ReleaseDuringReceiveSocket:
+            def __init__(self):
+                self.data = struct.pack("!I", len(raw)) + raw
+                self.sent = None
+            def settimeout(self, value):
+                pass
+            def recv(self, size):
+                if runtime.exchange_lock.locked():
+                    runtime.exchange_lock.release()
+                result, self.data = self.data[:size], self.data[size:]
+                return result
+            def sendall(self, value):
+                self.sent = value
+        connection = ReleaseDuringReceiveSocket()
+        runtime.exchange_lock.acquire()
+        RegisteredHandler(connection, ("127.0.0.1", 1), types.SimpleNamespace(policy=runtime))
+        self.assertIn("busy", json.loads(connection.sent[4:])["message"])
+        self.assertEqual(runtime._module.CALLS, 0)
+        self.assertFalse(runtime.faulted)
+        self.assertFalse(runtime.exchange_lock.locked())
+
+    def test_busy_partial_frame_obeys_existing_deadline_without_backend_call(self):
+        runtime = self.runtime()
+        class TimeoutOnBodySocket:
+            def __init__(self):
+                self.timeouts = []
+            def settimeout(self, value):
+                self.timeouts.append(value)
+            def recv(self, size):
+                if size == 4:
+                    return struct.pack("!I", 10)
+                raise socket.timeout("synthetic partial busy frame")
+            def sendall(self, value):
+                pass
+        connection = TimeoutOnBodySocket()
+        runtime.exchange_lock.acquire()
+        try:
+            RegisteredHandler(connection, ("127.0.0.1", 1), types.SimpleNamespace(policy=runtime))
+        finally:
+            runtime.exchange_lock.release()
+        self.assertTrue(all(0 < value <= .4 for value in connection.timeouts))
+        self.assertEqual(runtime._module.CALLS, 0)
+        self.assertFalse(runtime.faulted)
+
     def test_close_during_backend_does_not_claim_cancellation_or_return_response(self):
         self.set_source("import threading\nENTERED = threading.Event()\nRELEASE = threading.Event()\n"
                         "def create():\n    def policy(payload):\n        ENTERED.set()\n        RELEASE.wait(5)\n"

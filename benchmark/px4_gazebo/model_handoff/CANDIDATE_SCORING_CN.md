@@ -99,3 +99,8 @@ python3 -B -m benchmark.px4_gazebo.model_handoff.candidate_scoring \
 后续只读时钟/内核探针仍拒绝当前空载环境：20秒RAW相对偏移幅度下界约552ms，
 同时记录到tick变化；没有借诊断输出将任何分支start_matched改为true，也未实现
 起点匹配比较器或新增真实候选标签。证据及限制见 [CLOCK_KERNEL_CN.md](CLOCK_KERNEL_CN.md)。
+
+后续新增 [START_COMPARISON_CN.md](START_COMPARISON_CN.md) 的离线启动接收状态诊断：
+显式数值容差、离散状态差和原始证据/时钟复核分别报告；即使数值通过也始终
+`start_matched=false`。它不是候选分支认证器，不自动改写本评分器外部匹配字段，
+没有新增真实候选标签或预测/迁移成绩。

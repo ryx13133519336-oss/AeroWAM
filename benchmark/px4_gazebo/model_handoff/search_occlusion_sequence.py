@@ -30,6 +30,16 @@ SETTLE_NS = 1_000_000_000
 SAMPLE_NS = 250_000_000
 TARGET_POSES = {"probe_red": (4., 1., 2.4, 0.), "probe_blue": (4., -1., 2.4, 0.),
                 "probe_wall": (2., -.5, 2.4, 0.)}
+LAYOUTS = ("normal", "swapped")
+
+
+def target_poses(layout="normal"):
+    if layout not in LAYOUTS:
+        raise ValueError("Unknown private target layout")
+    poses = dict(TARGET_POSES)
+    if layout == "swapped":
+        poses["probe_red"], poses["probe_blue"] = poses["probe_blue"], poses["probe_red"]
+    return poses
 
 
 def camera_poses(phase):
@@ -40,8 +50,13 @@ def camera_poses(phase):
             for i, y in enumerate(ys)}
 
 
-def sequence_world(models):
+def sequence_world(models, layout="normal"):
+    targets = target_poses(layout)
     tree, pairs = static_occlusion_world(models, "search_revealed")
+    if layout != "normal":
+        for name in ("probe_red", "probe_blue"):
+            x, y, z, yaw = targets[name]
+            tree.getroot().find(f"world/model[@name='{name}']/pose").text = f"{x} {y} {z} 0 0 {yaw}"
     ET.SubElement(tree.getroot().find("world"), "plugin",
                   filename="gz-sim-user-commands-system", name="gz::sim::systems::UserCommands")
     return tree, pairs
@@ -51,9 +66,9 @@ def stamp(message):
     return message.header.stamp.sec * 1_000_000_000 + message.header.stamp.nsec
 
 
-def check_scene(scene, phase):
+def check_scene(scene, phase, layout="normal"):
     """Read-back evidence only; not a claim of pose at image exposure."""
-    expected = {**TARGET_POSES, **camera_poses(phase)}
+    expected = {**target_poses(layout), **camera_poses(phase)}
     models = {item.name: item for item in scene.model}
     if set(models) != set(expected) or len(scene.model) != len(expected):
         raise ValueError("Unexpected scene entities")
@@ -66,9 +81,9 @@ def check_scene(scene, phase):
             raise ValueError(f"Scene pose read-back mismatch: {name}")
 
 
-def check_pose_packet(packet, phase):
+def check_pose_packet(packet, phase, layout="normal"):
     """SceneBroadcaster's ongoing pose stream, not cached scene/info."""
-    expected = {**TARGET_POSES, **camera_poses(phase)}
+    expected = {**target_poses(layout), **camera_poses(phase)}
     selected = [pose for pose in packet.pose if pose.name in expected]
     poses = {pose.name: pose for pose in selected}
     if set(poses) != set(expected) or len(selected) != len(expected):
@@ -76,7 +91,7 @@ def check_pose_packet(packet, phase):
     # Reuse the numeric check while retaining the raw stamped pose packet.
     from types import SimpleNamespace
     check_scene(SimpleNamespace(model=[SimpleNamespace(name=name, pose=pose)
-                                       for name, pose in poses.items()]), phase)
+                                       for name, pose in poses.items()]), phase, layout)
 
 
 def audit_timeline(phases):
@@ -133,7 +148,7 @@ def _load_message(output, record, cls):
     return message
 
 
-def run(models, output, timeout_s=90.):
+def run(models, output, timeout_s=90., *, layout="normal"):
     if not math.isfinite(timeout_s) or not 10 <= timeout_s <= 120:
         raise ValueError("Sequence timeout must be 10..120 wall seconds")
     if os.name == "nt":
@@ -144,7 +159,7 @@ def run(models, output, timeout_s=90.):
     from gz.msgs10.image_pb2 import Image
     from gz.msgs10.pose_v_pb2 import Pose_V
 
-    tree, pairs = sequence_world(models)
+    tree, pairs = sequence_world(models, layout)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     tree.write(output / "world.sdf", encoding="utf-8", xml_declaration=True)
@@ -153,6 +168,7 @@ def run(models, output, timeout_s=90.):
     previous = os.environ.get("GZ_PARTITION")
     os.environ["GZ_PARTITION"] = partition
     summary = {"schema": SCHEMA, "partition": partition, "phases": [], "camera_pairs": pairs,
+               "private_layout": layout,
                "model_resources": resources, "capture_complete": False,
                "world_sha256": hashlib.sha256((output / "world.sdf").read_bytes()).hexdigest()}
     node, process, subscriptions = None, None, []
@@ -242,7 +258,7 @@ def run(models, output, timeout_s=90.):
                     try:
                         if packet is None or pose_age > 1. or stamp(packet) < record["command_clock_ns"]:
                             raise ValueError("Pose stream not fresh after command")
-                        check_pose_packet(packet, phase)
+                        check_pose_packet(packet, phase, layout)
                         break
                     except ValueError as exc:
                         record["last_scene_error"] = str(exc)
@@ -289,7 +305,7 @@ def run(models, output, timeout_s=90.):
                     healthy()
                     with lock:
                         packet = pose_stream["message"]
-                    check_pose_packet(packet, phase)
+                    check_pose_packet(packet, phase, layout)
                     if stamp(packet) >= last:
                         break
                     time.sleep(.02)
@@ -337,7 +353,8 @@ def inspect(output):
     if hashlib.sha256((output / "world.sdf").read_bytes()).hexdigest() != summary["world_sha256"]:
         raise ValueError("Sequence world fingerprint mismatch")
     world = ET.parse(output / "world.sdf").getroot().find("world")
-    expected = {**TARGET_POSES, **camera_poses("seen")}
+    layout = summary.get("private_layout", "normal")
+    expected = {**target_poses(layout), **camera_poses("seen")}
     if (world is None or world.get("name") != OCCLUSION_WORLD or world.findall("include")
             or len(world.findall("model")) != len(expected)
             or {m.get("name") for m in world.findall("model")} != set(expected)):
@@ -363,7 +380,7 @@ def inspect(output):
         name = phase["phase"]
         for key in ("poses_before", "poses_after"):
             packet = _load_message(output, phase[key], Pose_V)
-            check_pose_packet(packet, name)
+            check_pose_packet(packet, name, layout)
             lower = phase["command_clock_ns"] if key == "poses_before" else phase["frames"][-1]["stamp_ns"]
             if stamp(packet) < lower or key == "poses_before" and stamp(packet) > phase["boundary_clock_ns"]:
                 raise ValueError("Pose stream clock boundary mismatch")
@@ -383,7 +400,7 @@ def inspect(output):
             for pose in packet.pose:
                 if pose.name in camera_commands:
                     pose.CopyFrom(camera_commands[pose.name])
-            check_pose_packet(packet, name)
+            check_pose_packet(packet, name, layout)
         for index, frame in enumerate(phase["frames"]):
             measured = {"phase": name, "stamp_ns": frame["stamp_ns"], "agents": {}}
             for agent, record in frame["agents"].items():

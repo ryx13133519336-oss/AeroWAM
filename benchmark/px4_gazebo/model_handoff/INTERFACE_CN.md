@@ -92,6 +92,12 @@ utility；平局按请求候选顺序，全部被筛除时返回 None。默认�
 阈值和 abstain 执行方式仍需冻结。预测风险不是安全保证，也不替代飞行安全控制。
 接口没有使用真实候选收益，不会自动生成反事实监督，更不代表模型已经有预测能力。
 
+2026-10-18：新增独立 `candidate_scoring.py`，绑定公开请求/预测与分离的私有分支结果，
+检查计划候选×重复覆盖、起点匹配声明、故障与删失，再评分utility、排序/regret和逐机
+概率。只消费外部证据，不执行候选或认证仿真恢复；无预分配角色，拒绝旧固定方向intent。
+23项新测试与显式合成CLI复核通过，尚无真实配对分支成绩。定义、限制及用法见
+[CANDIDATE_SCORING_CN.md](CANDIDATE_SCORING_CN.md)。动作菜单标签不能冒充候选后果预测。
+
 通过 `DecisionAdapter(your_predictor)` 接入同一个 factory 服务入口。
 `DecisionClient.predict(request)` 返回逐候选预测与调用时延；400 ms 默认预算保留。
 **候选协议不能直接连接旧 live runner**，旧 runner 只接收动作；新闭环选择/执行路径后续接入。

@@ -111,6 +111,11 @@ utility；平局按请求候选顺序，全部被筛除时返回 None。默认�
 23项新测试与显式合成CLI复核通过，尚无真实配对分支成绩。定义、限制及用法见
 [CANDIDATE_SCORING_CN.md](CANDIDATE_SCORING_CN.md)。动作菜单标签不能冒充候选后果预测。
 
+另有独立私有 `composition_split` 审计：按场景族/父episode/决策点分组检查跨分区，
+检查声明轴上的组合暴露（含旧预训练、微调及验证调参），区分组合留出与新结构。
+只认证声明的一致性，不认证真实因素、训练来源完整性或迁移表现；正式划分尚未冻结。
+字段、命令与合成回归见 [COMPOSITION_SPLIT_CN.md](COMPOSITION_SPLIT_CN.md)。
+
 通过 `DecisionAdapter(your_predictor)` 接入同一个 factory 服务入口。
 `DecisionClient.predict(request)` 返回逐候选预测与调用时延；400 ms 默认预算保留。
 **候选协议不能直接连接旧 live runner**，旧 runner 只接收动作；新闭环选择/执行路径后续接入。

@@ -102,3 +102,56 @@ cd /mnt/d/AeroWAM
 
 指令只沿用现有启动工具的必填契约；本模式不执行搜索或评分，不把旧固定角色
 搜索runner包装成新角色自由任务闭环。
+
+## 2026-10-18：临时暂停同步服务的一次启动采样
+
+用户单独确认“临时暂停同步服务最多180秒，仅一次不解锁、不起飞启动采样，结束或
+失败立即恢复”后执行本轮。使用同一场景/资源、8组双机帧、原有10ms门槛；启动等待
+预算固定110秒，不重试。外部私有监督器使用raw时钟140秒上限，停止服务前先创建
+150秒独立恢复定时器。仿真以普通用户ryx运行；同步服务只临时stop/start，不改enabled、
+NTP配置、Windows时间或内核参数，不调用策略、不训练。
+
+私有目录为 `D:/AeroWAM-data/startup_clock_pause_20261018_v1/`。实际服务暂停约
+44.147932 raw秒，runner正常退出后立即恢复；原活动状态active/running、enabled已
+核验，独立恢复定时器已停止且卸载。没有其他仿真进程残留。单次启动不能作为前两轮
+不同boot的随机对照，也不能据32.743秒启动等待声称DDS稳定性或因果改善。
+
+| 检查范围 | 样本数 | monotonic跨度/秒 | realtime偏移幅度下界/ms | raw偏移幅度下界/ms | 结果 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 双机原始帧采样窗口 | 8 | 4.510258 | 0 | 2.303655 | 通过 |
+| 独立连续监测（启动至退出清理） | 879 | 44.029818 | 0 | 16.821862 | 拒绝 |
+
+原runner返回 `startup_only/no_motion_commands_requested`，manifest的`complete=true`
+只覆盖第一行的8帧采样规则，不能扩展为整个运行期通过。外部连续监测另保存
+`paused_host_clocks.json`，触发`clock_offset_excursion`；私有复核报告明确
+`whole_interval_quality_passed=false`。两种记录均保留，不反写原始manifest或summary，
+不将此轮晋升训练数据或候选分支配对。原工具尚未把启动/清理期连续监测接入完成
+门槛，这是下一项离线实现工作；不能用一次外部监督器代替该功能。
+
+连续采样的采集前子区间702点/35.155301秒已出现13.673123ms raw偏移幅度；覆盖8帧
+首末的连续子区间90点/4.462750秒约2.339031ms，退出阶段87点/4.311467秒约1.757591ms。
+这些区间是事后定位，不是多次独立实验或新门槛。整段首末净raw偏移仅约4.458ms，
+仍不能代替16.822ms整段幅度。下界0不表示时钟物理上绝对无变化。
+
+所有上下文/probe及采样起止boot一致：`99acf337-f292-4a66-9892-cc13a95e46f4`。
+暂停与监测上下文均记录服务inactive/enabled；恢复上下文active/enabled。
+没有逐时刻内核校时参数记录，因此不能唯一归因于残留slew、WSL或某个同步来源。
+本轮证明“暂停服务”不足以保证这次整个启动过程通过当前时钟门槛；不证明它对所有
+时钟异常均无效，也不把此前秒级realtime异常与此次raw变化混为同一已证实机制。
+
+64个原始文件均独立校验SHA256/长度并反序列化：32份1280×960 RGB/labels protobuf、
+32份odometry/status ROS CDR；图像共同stamp、遥测字段和JSON一致，sample stamp各自
+前进。接收年龄保守上界：status1.071311秒、odometry0.010525秒、camera0.070880秒、
+clock0.003053秒。图像跨度1.848仿真秒。这些仍是接收时状态，不能称曝光状态对齐。
+动作请求和ACK均0、没有control_link/flight_diagnostics，contacts和cleanup_errors为空，
+自有进程停止。Windows另从连续原始时钟采样重算，与WSL报告完全一致。
+
+私有核验入口为本轮目录的 `verify_evidence.py`，结果 `verification.json`；关键源哈希：
+
+- paused_host_clocks.json：`1e40f984552ef36335b13ec056fcf66c61ffd0e6a781bae14bfc418476539090`
+- startup_evidence/manifest.json：`9d6daf86bf677f8faf5b891c8fb940d999c7a702caa0ac5565f2703f6bec9cbe`
+- startup_evidence/samples.jsonl：`c8dde79eb266ab583dc7cf80a9073a6c5e94f10a5ee48493e123f536ac352ce2`
+
+本次系统干预授权已执行完，不追加暂停或仿真。下一步先离线补全整个启动期的连续
+时钟记录/拒绝逻辑，再决定新环境验证；不放宽门槛、不给模型oracle输入。主线继续
+保持无永久角色分工的协作技能与世界模型预测组合迁移；本轮没有产生该主线的成绩。

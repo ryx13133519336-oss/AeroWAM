@@ -29,12 +29,20 @@ class ModelConfig:
     dropout: float = 0.1
     phases: int = 4
     intents: int = 3
+    wam_revision: str = "legacy_v1"
+    wam_visibility_reward: bool = False
+    wam_collision_reward: bool = False
+    wam_prior_radius: float = 0.15
 
     def __post_init__(self) -> None:
         if self.method not in METHODS:
             raise ValueError(f"unknown method: {self.method}")
         if self.model_dim % self.heads:
             raise ValueError("model_dim must be divisible by heads")
+        if self.wam_revision not in {"legacy_v1", "expert_prior_v2"}:
+            raise ValueError("unknown WAM revision")
+        if not 0 < self.wam_prior_radius <= 0.25:
+            raise ValueError("WAM prior radius must be in (0, 0.25]")
 
 
 class PredictionHeads(nn.Module):
@@ -119,6 +127,8 @@ class DualWAMMPC(nn.Module):
         self.config = config
         d = config.model_dim
         context_dim = 2 * config.feature_dim + config.feature_dim + 2 * config.state_dim + 2 * config.action_dim
+        if config.wam_revision == "expert_prior_v2":
+            context_dim = config.history * (context_dim - config.feature_dim) + config.feature_dim
         self.context = nn.Sequential(nn.Linear(context_dim, 2 * d), nn.GELU(), nn.Linear(2 * d, d), nn.LayerNorm(d))
         self.transition = nn.Sequential(nn.Linear(d + 8, 2 * d), nn.GELU(), nn.Linear(2 * d, d))
         self.auxiliary_action = nn.Sequential(nn.Linear(d, d), nn.GELU(), nn.Linear(d, 8), nn.Tanh())
@@ -127,24 +137,37 @@ class DualWAMMPC(nn.Module):
         self.visibility = nn.Linear(d, 1)
         self.handoff = nn.Linear(d, 1)
         self.collision = nn.Linear(d, 1)
+        if config.wam_revision == "expert_prior_v2":
+            # Fixed observation targets prevent a collapsed learned latent from
+            # making the transition loss artificially small.
+            self.next_observation = nn.Linear(d, 2 * config.feature_dim + 2 * config.state_dim)
 
     def encode(self, batch: Mapping[str, Tensor]) -> Tensor:
+        if self.config.wam_revision == "expert_prior_v2":
+            return self.context(torch.cat((
+                batch["visual"].flatten(1), batch["text"],
+                batch["state"].flatten(1), batch["previous_action"].flatten(1),
+            ), dim=-1))
         visual = batch["visual"][:, -1].flatten(1)
         state = batch["state"][:, -1].flatten(1)
         previous = batch["previous_action"][:, -1].flatten(1)
         return self.context(torch.cat((visual, batch["text"], state, previous), dim=-1))
 
-    def forward(self, batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
+    def forward(self, batch: Mapping[str, Tensor], *, transition_action: Tensor | None = None) -> dict[str, Tensor]:
         latent = self.encode(batch)
         action = self.auxiliary_action(latent).view(latent.shape[0], 2, 4)
-        next_latent = self.transition(torch.cat((latent, action.flatten(1)), dim=-1))
-        return {
+        condition = action if transition_action is None else transition_action
+        next_latent = self.transition(torch.cat((latent, condition.flatten(1)), dim=-1))
+        output = {
             "latent": latent, "next_latent": next_latent, "action": action,
             "intent_logits": self.intent(latent), "phase_logits": self.phase(latent),
             "visibility_logit": self.visibility(next_latent).squeeze(-1),
             "handoff_logit": self.handoff(next_latent).squeeze(-1),
             "collision_logit": self.collision(next_latent).squeeze(-1),
         }
+        if self.config.wam_revision == "expert_prior_v2":
+            output["next_observation"] = self.next_observation(next_latent)
+        return output
 
     @torch.no_grad()
     def plan(
@@ -153,6 +176,10 @@ class DualWAMMPC(nn.Module):
     ) -> tuple[Tensor, Tensor]:
         if batch["visual"].shape[0] != 1:
             raise ValueError("MPC inference currently requires batch size 1")
+        if min(horizon, candidates, iterations) < 1:
+            raise ValueError("planner budgets must be positive")
+        if self.config.wam_revision == "expert_prior_v2":
+            return self._plan_with_prior(batch, horizon=horizon, candidates=candidates, iterations=iterations)
         device = batch["visual"].device
         latent0 = self.encode(batch)
         mean = torch.zeros(horizon, 8, device=device)
@@ -174,6 +201,56 @@ class DualWAMMPC(nn.Module):
             std = elite.std(dim=0, unbiased=False).clamp_min(0.05)
         intent = self.intent(latent0).argmax(dim=-1)
         return mean[0].view(1, 2, 4), intent
+
+    def _plan_with_prior(self, batch: Mapping[str, Tensor], *, horizon: int, candidates: int, iterations: int) -> tuple[Tensor, Tensor]:
+        """Search near the imitation policy; singleton labels never rank plans.
+
+        This is an expert-prior baseline. Its predicted transitions are proxies
+        learned from recorded expert commands, not verified executed controls.
+        """
+        latent0 = self.encode(batch)
+        if not (self.config.wam_visibility_reward or self.config.wam_collision_reward):
+            # No validated action-dependent objective: do not manufacture a
+            # benefit from random search. Expose this fallback in metadata.
+            return self.auxiliary_action(latent0).view(1, 2, 4), self.intent(latent0).argmax(-1)
+        latent = latent0
+        references = []
+        for _ in range(horizon):
+            prior = self.auxiliary_action(latent)
+            references.append(prior[0])
+            latent = self.transition(torch.cat((latent, prior), dim=-1))
+        reference = torch.stack(references)
+        radius = self.config.wam_prior_radius
+        lower, upper = (reference - radius).clamp(-1, 1), (reference + radius).clamp(-1, 1)
+        mean = reference.clone()
+        std = torch.full_like(mean, radius / 2)
+        best_actions = reference.clone()
+        best_score = float("-inf")
+        for _ in range(iterations):
+            actions = mean.unsqueeze(0) + std.unsqueeze(0) * torch.randn(candidates, horizon, 8, device=mean.device)
+            actions = actions.maximum(lower).minimum(upper)
+            actions[0] = reference  # Always allow the learned prior itself.
+            latent = latent0.expand(candidates, -1)
+            score = torch.zeros(candidates, device=mean.device)
+            for step in range(horizon):
+                prior = self.auxiliary_action(latent)
+                score -= (actions[:, step] - prior).square().mean(-1)
+                latent = self.transition(torch.cat((latent, actions[:, step]), dim=-1))
+                if self.config.wam_visibility_reward:
+                    score += 1.5 * torch.sigmoid(self.visibility(latent).squeeze(-1))
+                if self.config.wam_collision_reward:
+                    score -= 4.0 * torch.sigmoid(self.collision(latent).squeeze(-1))
+                # Handoff events are sparse protocol events, not a validated
+                # action-conditioned progress reward, so they do not rank plans.
+            winner = int(score.argmax())
+            if float(score[winner]) > best_score:
+                best_score = float(score[winner])
+                best_actions = actions[winner].clone()
+            elite = actions[score.topk(max(1, candidates // 8)).indices]
+            mean = elite.mean(0)
+            std = elite.std(0, unbiased=False).clamp_min(radius / 20)
+        intent = self.intent(latent0).argmax(-1)
+        return best_actions[0].view(1, 2, 4), intent
 
 
 def build_model(config: ModelConfig) -> nn.Module:

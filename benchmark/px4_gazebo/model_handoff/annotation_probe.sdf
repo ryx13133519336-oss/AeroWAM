@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<!-- Independent static diagnostic; never replaces lawn/PX4 camera models. -->
+<sdf version="1.9">
+  <world name="aerowam_annotation_probe">
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <physics name="probe" type="ignored"><max_step_size>0.01</max_step_size><real_time_factor>1</real_time_factor></physics>
+    <scene><ambient>0.7 0.7 0.7 1</ambient><background>0.1 0.1 0.1 1</background></scene>
+    <light name="sun" type="directional"><pose>0 0 8 0 0 0</pose><diffuse>0.8 0.8 0.8 1</diffuse><direction>1 0 -1</direction></light>
+    <model name="probe_red">
+      <static>true</static><pose>4 0.8 1 0 0 0</pose>
+      <plugin filename="gz-sim-label-system" name="gz::sim::systems::Label"><label>11</label></plugin>
+      <link name="object">
+        <visual name="body"><geometry><sphere><radius>0.5</radius></sphere></geometry><material><ambient>0.9 0.02 0.02 1</ambient><diffuse>0.9 0.02 0.02 1</diffuse></material></visual>
+        <visual name="stripe"><geometry><box><size>1.05 0.15 0.25</size></box></geometry><material><ambient>0.01 0.01 0.01 1</ambient><diffuse>0.01 0.01 0.01 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="probe_blue">
+      <static>true</static><pose>4 -0.9 1 0 0 0</pose>
+      <plugin filename="gz-sim-label-system" name="gz::sim::systems::Label"><label>22</label></plugin>
+      <link name="object"><visual name="body"><geometry><box><size>0.8 0.8 0.8</size></box></geometry><material><ambient>0.02 0.02 0.9 1</ambient><diffuse>0.02 0.02 0.9 1</diffuse></material></visual></link>
+    </model>
+    <model name="probe_wall">
+      <static>true</static><pose>3 0.98 1 0 0 0</pose>
+      <plugin filename="gz-sim-label-system" name="gz::sim::systems::Label"><label>33</label></plugin>
+      <link name="object"><visual name="wall"><geometry><box><size>0.1 0.25 1.5</size></box></geometry><material><ambient>0.5 0.5 0.5 1</ambient><diffuse>0.5 0.5 0.5 1</diffuse></material></visual></link>
+    </model>
+    <model name="probe_camera">
+      <static>true</static><pose>0 0 1 0 0 0</pose>
+      <link name="camera_link">
+        <sensor name="public_rgb" type="camera">
+          <topic>/aerowam/annotation_probe/rgb</topic>
+          <camera><horizontal_fov>1.74</horizontal_fov><image><width>256</width><height>256</height><format>R8G8B8</format></image><clip><near>0.1</near><far>20</far></clip></camera>
+          <always_on>true</always_on><update_rate>10</update_rate><visualize>false</visualize>
+        </sensor>
+        <sensor name="private_segmentation" type="segmentation">
+          <topic>/aerowam/annotation_probe/segmentation</topic>
+          <camera><segmentation_type>instance</segmentation_type><horizontal_fov>1.74</horizontal_fov><image><width>256</width><height>256</height></image><clip><near>0.1</near><far>20</far></clip></camera>
+          <always_on>true</always_on><update_rate>10</update_rate><visualize>false</visualize>
+        </sensor>
+      </link>
+    </model>
+  </world>
+</sdf>

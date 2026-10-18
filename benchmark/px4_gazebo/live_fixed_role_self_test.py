@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 
 from .live_fixed_role_batch import (
     ensure_new_output,
@@ -18,6 +19,8 @@ from .live_fixed_role_batch import (
 from .live_fixed_role_evaluate import load_live_records, summarize_records
 from .live_sim_manager import (
     ProcessInfo,
+    Px4GazeboConfig,
+    Px4GazeboSession,
     has_dds_agent,
     has_image_bridge,
     gazebo_gui_window_ids,
@@ -111,6 +114,36 @@ def main() -> None:
         ProcessInfo(17, 1, 17, 17, ("python3", "other_job.py")),
     ]
     assert stale_simulator_pids(processes, world="lawn") == {10, 11, 12, 13}
+    # Ruby rewrites the real server's argv into a single process title.
+    ruby_processes = [
+        ProcessInfo(20, 1, 20, 20, (
+            "gz sim --verbose=1 -r -s /home/ryx/PX4-Autopilot/Tools/simulation/gz/worlds/lawn.sdf   ",
+        )),
+        ProcessInfo(21, 1, 20, 20, ("gz sim -g",)),
+        ProcessInfo(22, 1, 22, 22, (
+            "gz sim -r -s /home/ryx/PX4-Autopilot/Tools/simulation/gz/worlds/other.sdf",
+        )),
+        ProcessInfo(23, 1, 23, 23, ("python3", "-c", "gz sim -r lawn.sdf")),
+        ProcessInfo(24, 1, 24, 24, ("gz sim 'invalid",)),
+    ]
+    assert stale_simulator_pids(ruby_processes, world="lawn") == {20, 21}
+    with tempfile.TemporaryDirectory() as directory:
+        session = Px4GazeboSession(Px4GazeboConfig())
+        session._log_dir = Path(directory)
+        session._processes = [("px4_0", SimpleNamespace(poll=lambda: None))]
+        log_path = Path(directory) / "px4_0.log"
+        log_path.write_text("INFO [px4] startup script started\n", encoding="utf-8")
+        session._check_processes()
+        log_path.write_text(
+            "ERROR [px4] Startup script returned with return value: 2\n", encoding="utf-8",
+        )
+        try:
+            session._check_processes()
+        except RuntimeError as exc:
+            assert "startup script failed with code 2" in str(exc)
+            assert str(log_path) in str(exc)
+        else:
+            raise AssertionError("PX4 startup failure must be detected while its shell is alive")
     assert has_dds_agent(processes)
     assert has_image_bridge(processes, world="lawn")
     assert gazebo_gui_window_ids(

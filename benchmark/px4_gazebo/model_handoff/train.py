@@ -39,6 +39,10 @@ class FeatureSequenceDataset:
             "next_visual": self.cache["visual"][next_index].float(),
             "next_state": self.cache["state"][next_index].float(),
             "next_previous_action": self.cache["previous_action"][next_index].float(),
+            "transition_valid": torch.tensor(float(next_index != index)),
+            "next_visibility": self.cache["visibility"][next_index].float(),
+            "next_handoff": self.cache["handoff"][next_index].float(),
+            "next_collision": self.cache["collision"][next_index].float(),
         }
 
 
@@ -66,7 +70,8 @@ def _loss(
     phase_weight: Any = None,
 ) -> Any:
     import torch.nn.functional as functional
-    output = model(batch)
+    revised_wam = method == "dual_wam_mpc" and model.config.wam_revision == "expert_prior_v2"
+    output = model(batch, transition_action=batch["action"]) if revised_wam else model(batch)
     total = functional.smooth_l1_loss(output["action"], batch["action"])
     total = total + 0.25 * functional.cross_entropy(
         output["intent_logits"],
@@ -86,10 +91,23 @@ def _loss(
             "previous_action": torch_cat_history(batch["previous_action"], batch["next_previous_action"]),
         }
         target_latent = model.encode(next_batch).detach()
-        total = total + 0.5 * functional.mse_loss(output["next_latent"], target_latent)
-        total = total + 0.2 * functional.binary_cross_entropy_with_logits(output["visibility_logit"], batch["visibility"])
-        total = total + 0.2 * functional.binary_cross_entropy_with_logits(output["handoff_logit"], batch["handoff"])
-        total = total + 0.4 * functional.binary_cross_entropy_with_logits(output["collision_logit"], batch["collision"])
+        if revised_wam:
+            import torch
+            mask = batch["transition_valid"]
+            def valid_mean(values: Any) -> Any:
+                return (values * mask).sum() / mask.sum().clamp_min(1)
+            total = total + 0.5 * valid_mean((output["next_latent"] - target_latent).square().mean(-1))
+            target_observation = torch.cat((batch["next_visual"].flatten(1), batch["next_state"].flatten(1)), -1)
+            total = total + 0.5 * valid_mean(functional.smooth_l1_loss(output["next_observation"], target_observation, reduction="none").mean(-1))
+            for name, weight in (("visibility", 0.2), ("handoff", 0.2), ("collision", 0.4)):
+                total = total + weight * valid_mean(functional.binary_cross_entropy_with_logits(
+                    output[f"{name}_logit"], batch[f"next_{name}"], reduction="none",
+                ))
+        else:
+            total = total + 0.5 * functional.mse_loss(output["next_latent"], target_latent)
+            total = total + 0.2 * functional.binary_cross_entropy_with_logits(output["visibility_logit"], batch["visibility"])
+            total = total + 0.2 * functional.binary_cross_entropy_with_logits(output["handoff_logit"], batch["handoff"])
+            total = total + 0.4 * functional.binary_cross_entropy_with_logits(output["collision_logit"], batch["collision"])
     return total
 
 
@@ -133,9 +151,14 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--wam-revision", choices=("legacy_v1", "expert_prior_v2"), default="legacy_v1")
     args = parser.parse_args()
     if not 1 <= args.steps <= 50_000:
         raise SystemExit("--steps must be in [1, 50000]")
+    if args.wam_revision != "legacy_v1" and args.method != "dual_wam_mpc":
+        raise SystemExit("--wam-revision only applies to dual_wam_mpc")
+    if args.output.exists():
+        raise SystemExit(f"Checkpoint already exists; choose a new output path: {args.output}")
     try:
         import torch
     except ImportError as exc:
@@ -148,7 +171,15 @@ def main() -> None:
     device = torch.device(args.device)
     train_cache = torch.load(args.train_cache, map_location="cpu", weights_only=False)
     val_cache = torch.load(args.validation_cache, map_location="cpu", weights_only=False)
-    config = ModelConfig(method=args.method, feature_dim=int(train_cache["visual"].shape[-1]))
+    # Positive/negative labels are necessary, but not sufficient, to validate
+    # a reward head for counterfactual planning. Keep both disabled in v2.
+    config = ModelConfig(method=args.method, feature_dim=int(train_cache["visual"].shape[-1]), wam_revision=args.wam_revision)
+    reward_coverage = {}
+    if args.method == "dual_wam_mpc":
+        reward_coverage = {key: torch.unique(train_cache[key]).tolist() for key in ("collision", "visibility", "handoff")}
+        print(f"wam_revision={args.wam_revision} reward_label_values={reward_coverage}", flush=True)
+        if args.wam_revision == "expert_prior_v2":
+            print("Expert-command transition proxy + imitation-prior MPC; learned visibility/collision/handoff rewards disabled.", flush=True)
     model = build_model(config).to(device)
     count = parameter_count(model)
     if count > 20_000_000:
@@ -191,6 +222,10 @@ def main() -> None:
                     model, config, seed=args.seed, step=step, validation_loss=validation_loss,
                     encoder=train_cache["encoder"], pretrained=train_cache["pretrained"],
                     trainable_parameters=count,
+                    reward_label_values=reward_coverage,
+                    transition_condition=("recorded_expert_command_proxy" if args.wam_revision == "expert_prior_v2" else "predicted_action") if args.method == "dual_wam_mpc" else None,
+                    planner_revision=args.wam_revision if args.method == "dual_wam_mpc" else None,
+                    planner_mode=("imitation_fallback" if args.wam_revision == "expert_prior_v2" else "cem_learned_rewards") if args.method == "dual_wam_mpc" else None,
                 ), args.output)
 
 

@@ -207,6 +207,27 @@ python3 -m benchmark.px4_gazebo.model_handoff.collect \
 
 ## 3. 冻结 OpenCLIP 特征
 
+### 确认监督与旧数据修复
+
+专家控制为 10 Hz，常规记录为 2 Hz，交接请求会额外记录。
+确认事件可能出现在非记录时刻；采集器现在保留待确认标志，在确认已经发生且
+UAV1 持续可见的后续记录行标注 `confirm`。它是专家监督标签，不表示原始 oracle
+发送过确认消息。正式模型评测仍要求模型显式输出确认，验收规则保持原样。
+
+对全部缺失确认标签的旧采集，可使用 `model_handoff.repair_dataset`，传入
+`--source` 原训练集、`--results` 正式成功结果、`--manifest` 原冻结清单和
+`--output` 新目录。工具先检查完整覆盖、成功结果、指标回放及图像完整性，
+再使用完整日志真值与采样行的精确对应关系，在验证事件之后且满足持续可见的
+第一条已有图像上补标。图像、时间戳、航点、真值和飞行结果均保留；动作历史
+由此前记录的专家航点重建。每条补标依据保存在 `evaluator/supervision_repair.json`，
+汇总在 `supervision_repair_report.json`。输出必须为新目录，原数据保留。
+
+补标后必须重新生成特征，不能沿用旧缓存。标签校验不能代替图像身份识别检查
+或真实闭环评测；先完成小规模训练和 validation 闭环 smoke 再做长训练。
+新采集验收要求同时存在 `handoff`、`confirm` 和一致的历史航点，可通过
+`model_handoff.dataset --require-expert-supervision` 单独检查。旧结果的
+`already verified` 只表示断点跳过成功飞行，不会自动修复旧训练目录。
+
 ```bash
 python3 -m benchmark.px4_gazebo.model_handoff.features \
   /mnt/d/AeroWAM-data/model_handoff_dataset \
@@ -240,6 +261,13 @@ done
 
 批处理默认按需启动一个策略服务器，因此不需要手动开九个终端。每个 fixture 内的方法顺序会确定性随机化：
 
+批次应在固定代码和检查点下独立运行，不应运行中修改验收逻辑。观测采集的
+缺帧、相机同步等异常标记为 `simulator_error`，安全降落后自动重试；重试耗尽
+会停止批次。模型推理异常、连续推理超时和碰撞仍作为模型失败保存，不为了
+获得成功结果而重跑。相机同步 100 ms 和默认推理 400 ms 门限不变。
+旧版已经误标为 `safety_abort` 的相机同步故障不会被断点续跑自动修复；须保留
+原始记录并将其移出正式结果目录后，才会补跑该 fixture。
+
 想观察学习模型，在 `model_handoff.batch run` 命令后加 `--show-gui`；oracle 的 `model_handoff.collect` 也支持该选项。它只打开观察窗口，保持正式运行的人工标记隐藏。CPU OpenGL 会增加显示开销，因此 GUI 适合检查 smoke episode；统一推理延迟比较仍用默认无 GUI 模式。
 
 ```bash
@@ -268,3 +296,37 @@ python3 -m benchmark.px4_gazebo.model_handoff.evaluate \
 ```
 
 主排名使用三个 OOD split 的 `task_success`。当置信区间重叠时，再比较视觉中断、碰撞、平均/最大双机距离和路径长度。若还需报告 ID-to-OOD gap，额外在 validation fixture 上运行同一批 checkpoint；报告会明确将它标为 validation reference，而不会混入 120 个正式 OOD 测试 episode。
+
+## 7. WAM 修正版与预测能力边界
+
+2026-10-13 的 legacy_v1 validation 结果为 0/40。新增 `--wam-revision expert_prior_v2`
+用于诊断动作先验基线，旧 checkpoint 仍默认使用 legacy_v1。当前专家缓存没有危险或
+联合不可见样本，新版本禁用未经验证的奖励规划，实际为 imitation_fallback。
+它不能证明自主 MPC 或组合迁移能力。训练/规划修正、独立结果与后续数据要求见
+[WAM_V2_CN.md](WAM_V2_CN.md)。外部适配和部分可观测、通信/队友变化、组合迁移仍在
+[TODO_CN.md](TODO_CN.md) 中独立推进。
+
+## 8. 决策导向 benchmark 草案
+
+用户最终指定两张图为准：组合式协作泛化为主线，候选协作决策评测为核心。
+先集中式双机观测、暂缓通信实现，完整版本仍包括跨任务的延迟通信组合。
+预测层以历史、指令和候选动作序列为输入，决策层以真实分支的候选效果评价
+ranking、Utility Regret、风险校准和闭环成功。设计与前置实现门槛见
+[DECISION_BENCHMARK_CN.md](DECISION_BENCHMARK_CN.md)。旧交接版本继续保留，
+草案还不是可运行的采集/评测命令。
+
+2026-10-14 已加入可选发布控制 trace（dataset/2）、外部模型 factory 服务入口与
+独立候选预测/选择 draft 接口；非飞行测试通过。接口语义、检查命令和单场景 trace
+smoke 见 [INTERFACE_CN.md](INTERFACE_CN.md)。单场景仿真采集与严格数据验证已通过，
+结果和重复帧修复见 [TRACE_SMOKE_CN.md](TRACE_SMOKE_CN.md)。新增 controls/2 时钟证据
+单场景采集通过结构验证，离线 draft 质量检查发现图像偏旧/复用与 host 时钟配对异常；
+controls/3 的双帧前进/新鲜度门控和时钟读取区间也已通过首次单场景结构验证，
+图像年龄约150 ms且无复用；仍发现约104 ms发布间隔及RUN内host时钟偏移不一致。
+不作为精确转移监督就绪证据。尚未完成时钟对齐与
+多任务候选闭环，不需要因此重跑旧专家数据或启动新一轮长训练。
+
+新 trace pilot 可启用 `--require-trace-receive-quality`：默认20秒无飞行host时钟检查，
+异常不启动仿真；成功任务的质量报告保存在 evaluator，质量拒绝保留attempt且不晋升
+正式训练目录，单独报告trace_quality_error。默认旧采集不启用该门槛。
+独立 `clock_probe` 已在无仿真时复现约1.8~1.9秒UNIX偏移变化，另一20秒窗口通过；
+异常间歇出现，仍需运行中质量验收。命令及边界见 [INTERFACE_CN.md](INTERFACE_CN.md)。

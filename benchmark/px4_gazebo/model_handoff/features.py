@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import time
 from typing import Any, Iterable, Mapping, Sequence
 
 from ..contract import AGENT_IDS
@@ -127,9 +128,13 @@ def cache_features(episodes: Sequence[Path], output: Path, *, device: str, batch
             image_paths.extend(public / sample["rgb_jpeg"][agent] for agent in AGENT_IDS)
     if not rows:
         raise ValueError("no dataset samples found")
+    print(f"encoder={ENCODER_NAME} device={encoder.device} episodes={len(episodes)} samples={len(rows)} images={len(image_paths)}", flush=True)
+    started = time.monotonic()
     visual_parts = []
     for start in range(0, len(image_paths), batch_size):
         visual_parts.append(encoder.encode_paths(image_paths[start:start + batch_size]))
+        if (start // batch_size + 1) % 25 == 0 or start + batch_size >= len(image_paths):
+            print(f"images={min(start + batch_size, len(image_paths))}/{len(image_paths)} elapsed_s={time.monotonic() - started:.1f}", flush=True)
     visual = torch.cat(visual_parts).view(len(rows), 2, -1).to(torch.float16)
     unique_text = sorted({str(row["instruction"]) for row in rows})
     text_features = encoder.encode_text(unique_text).to(torch.float16)

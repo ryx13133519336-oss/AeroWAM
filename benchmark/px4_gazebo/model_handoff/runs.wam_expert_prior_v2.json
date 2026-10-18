@@ -1,0 +1,9 @@
+[
+  {
+    "method": "dual_wam_mpc",
+    "training_seed": 0,
+    "checkpoint": "/mnt/d/AeroWAM-data/checkpoints/dual_wam_mpc_expert_prior_v2_seed_0.pt",
+    "checkpoint_id": "dual_wam_mpc_expert_prior_v2_seed_0",
+    "endpoint": "127.0.0.1:8875"
+  }
+]

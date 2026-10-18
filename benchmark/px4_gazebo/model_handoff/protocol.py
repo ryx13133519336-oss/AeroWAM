@@ -18,6 +18,9 @@ FORBIDDEN_POLICY_KEYS = frozenset({
     "truth", "target_pose", "target_position", "target_id", "target_identity",
     "occluder", "occluder_center", "occluder_half_extents", "global_map",
     "map", "future", "future_trajectory", "evaluator", "fixture_truth",
+    "teammate_response", "teammate_policy_id", "teammate_behavior_id",
+    "teammate_response_schedule", "motion_calibration", "private_local_goals",
+    "candidate_actual_utility", "target_visibility_truth",
 })
 
 
@@ -71,7 +74,8 @@ class ModelObservation:
     message_history: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
-        if not self.episode_id or not self.instruction:
+        if (not isinstance(self.episode_id, str) or not self.episode_id
+                or not isinstance(self.instruction, str) or not self.instruction.strip()):
             raise ValueError("episode_id and instruction are required")
         if int(self.timestamp_ns) < 0:
             raise ValueError("timestamp_ns must be non-negative")
@@ -109,6 +113,35 @@ class ModelObservation:
             }
         assert_truth_free(payload)
         return payload
+
+    @classmethod
+    def from_wire(cls, payload: Mapping[str, Any]) -> "ModelObservation":
+        """Decode and validate a live request before an external model sees it."""
+        assert_truth_free(payload)
+        allowed = {"protocol", "episode_id", "instruction", "timestamp_ns",
+                   "image_timestamp_ns", "states", "action_history", "message_history", "rgb_jpeg_b64"}
+        if payload.get("protocol") != MODEL_PROTOCOL_VERSION or set(payload) - allowed:
+            raise ValueError("Invalid observation protocol or unknown input fields")
+        if set(payload["rgb_jpeg_b64"]) != set(AGENT_IDS) or set(payload["states"]) != set(AGENT_IDS):
+            raise ValueError("Observation requires exactly two vehicles")
+        history = payload.get("action_history", [])
+        for row in history:
+            if set(row) != set(AGENT_IDS):
+                raise ValueError("Invalid action history agents")
+            for agent in AGENT_IDS:
+                _finite_tuple(row[agent], 4, "history waypoint")
+        if len(history) > 4 or len(payload.get("message_history", [])) > 16:
+            raise ValueError("Observation history exceeds protocol limits")
+        if any(abs(int(payload["timestamp_ns"]) - int(stamp)) > 100_000_000
+               for stamp in payload["image_timestamp_ns"].values()):
+            raise ValueError("image/action synchronization exceeds 100 ms")
+        return cls(
+            episode_id=payload["episode_id"], instruction=payload["instruction"],
+            timestamp_ns=payload["timestamp_ns"], image_timestamp_ns=payload["image_timestamp_ns"],
+            rgb_jpeg={agent: base64.b64decode(payload["rgb_jpeg_b64"][agent], validate=True) for agent in AGENT_IDS},
+            states={agent: VehicleState(**payload["states"][agent]) for agent in AGENT_IDS},
+            action_history=history, message_history=payload.get("message_history", []),
+        )
 
     def canonical_bytes(self) -> bytes:
         return json.dumps(

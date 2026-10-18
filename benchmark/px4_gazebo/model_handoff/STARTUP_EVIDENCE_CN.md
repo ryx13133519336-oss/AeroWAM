@@ -27,10 +27,13 @@ Gazebo时间戳，采样之间至少250仿真毫秒；两机odometry sample stam
 - 每帧两机各一份原始RGB/labels protobuf及odometry/status ROS CDR，合计8文件。
 - 逐采样host realtime/monotonic/raw/boottime读取区间和独立时钟诊断。
 
-使用现有 `clock_probe` 的10毫秒相邻偏移变化/读取不确定性诊断门槛；
+使用现有 `clock_probe` 的10毫秒相邻/整段偏移变化及读取不确定性诊断门槛；
 任一路可用时钟的诊断失败，则保留全部原始文件，`complete=false`，退出2。
-`complete=true`只表示此次采样与上述门槛完成，不表示状态恢复或分支匹配。
-采样频率不足以排除间隔内的瞬时变化，也未覆盖整个启动阶段的时钟。
+当前runner另要求下述会话连续监测通过，使用manifest `/2-draft`；采齐帧后只标
+`capture_complete=true`，此时`complete`仍为false。进程清理后才决定最终完成。
+`complete=true`只表示声明范围内的接收采样/时钟及清理门槛完成，不表示状态恢复
+或分支匹配。采样频率不足以排除间隔内的瞬时变化。旧`/1-draft`仅检查采样窗口，
+不能作为整个启动阶段通过的证据。
 目录独占创建；未采齐、IO失败、陈旧数据等不得取得完成标记。
 
 这些仍是接收时状态，不是曝光时状态。没有physics/controller/estimator内部快照、
@@ -155,3 +158,42 @@ clock0.003053秒。图像跨度1.848仿真秒。这些仍是接收时状态，�
 本次系统干预授权已执行完，不追加暂停或仿真。下一步先离线补全整个启动期的连续
 时钟记录/拒绝逻辑，再决定新环境验证；不放宽门槛、不给模型oracle输入。主线继续
 保持无永久角色分工的协作技能与世界模型预测组合迁移；本轮没有产生该主线的成绩。
+
+## 连续会话门控实现：离线验证完成，尚无新runner实测
+
+`search_pilot --startup-evidence-frames`现已自动启用 `startup_clock`。监测在ROS/Gazebo
+传输初始化和任何自有进程启动之前开始，在ROS关闭、自有进程停止及日志关闭之后
+结束；不覆盖此前Python导入、静态场景/资源准备或最后报告序列化的耗时。普通飞行
+和命令检查模式不启用此功能。没有新系统服务设置或仿真启动。
+
+私有 `evaluator/startup_host_clocks.json` 保存完整原始读取区间、起止环境和报告，
+保持 `aerowam-host-clock-probe/1` 原始格式，新增 `session_quality` 字段。
+报告 `aerowam-startup-session-clock-quality/1-draft` 固定目标50ms间隔、同步端点读取、
+最多10000条内存采样；超过容量直接失败，不截断历史。相邻10ms/整段10ms/读取宽度
+10ms检查沿用profile 2-draft；另外要求实际最大采样间隔不超过250ms、realtime/raw/
+boottime三路均可用、起止boot及clocksource非空且相同。这是新增的draft覆盖条件，
+不能把250ms间隙解释为其中没有未观测到的变化。
+
+manifest `/2-draft` 的 `capture_complete` 表示帧采样阶段已完成其局部检查，
+`session_completed` 表示runner正常结束且自有进程停止、无清理错误；`complete`只有
+在两者及连续时钟检查均通过后才为true。`session_clock_quality`包含报告文件的相对
+文件名、长度及SHA256（路径相对于evaluator目录）。summary保存
+`startup_clock_quality` 与 `startup_receive_quality_passed`。帧已采齐但全程门控失败
+时，category为`simulator_error`、reason为`startup_session_quality_failed`，
+`result_before_startup_clock_gate`保留门控前结果。已有启动失败原因不被时钟问题覆盖。
+
+启动/后台线程读取异常、线程无法停止、样本上限、数据缺失、环境不可核实、采样
+间隔过大和时钟报告落盘失败均不得通过。即使ROS或日志清理异常，也优先停止自有
+进程并保存失败状态；没有创建采样manifest的早期失败仍保存连续监测结果。原始帧
+和失败报告留在私有目录。direct `StartupEvidence` 的旧局部API仍支持 `/1-draft`，
+runner始终显式要求会话门控，不将旧API或旧记录视为新版本通过。
+
+新增26项无飞行回归；加上已发布232项，Windows/WSL各258项通过。包含真实runner
+配内存传输/进程的接线回归：启动前开监测、清理后收尾、准备阶段失败、ROS清理
+失败和退出阶段漂移；这些不是真实仿真结果。
+
+另对上轮879条保存数据只读应用新质量函数：因16.821862ms整段raw幅度拒绝，新增
+覆盖条件在这份记录中没有额外issue。Windows/WSL重分析完全一致，源文件和旧
+manifest哈希未变；新报告另存私有 `session_gate_reanalysis_20261018_v1.json`。
+不重写旧`complete=true`，不声称已用新runner完成实际采样。新环境实测、曝光时
+状态对齐、候选同起点匹配和世界模型预测成绩仍待完成。

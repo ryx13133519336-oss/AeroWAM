@@ -25,7 +25,7 @@ def _vector(value, length):
 class StartupEvidence:
     """Append-only raw evidence. All artifacts stay in the private directory."""
 
-    def __init__(self, directory, count, scene_sha256):
+    def __init__(self, directory, count, scene_sha256, *, require_session_clock=False):
         validate_mode(count, execute_flight=False, control_link_check=False,
                       policy="rgb_scan", teammate_response="nominal")
         if count == 0:
@@ -33,6 +33,7 @@ class StartupEvidence:
         self.directory = Path(directory)
         self.directory.mkdir(exist_ok=False)
         self.count, self.rows = count, []
+        self.require_session_clock = require_session_clock
         self.manifest = {
             "schema": "aerowam-disarmed-startup-evidence/1-draft",
             "scene_sha256": scene_sha256, "requested_frames": count,
@@ -49,6 +50,10 @@ class StartupEvidence:
                               "rng_state", "pending_control_and_sensor_queues", "task_and_teammate_state"],
             "formal_benchmark_result": False,
         }
+        if require_session_clock:
+            self.manifest.update(schema="aerowam-disarmed-startup-evidence/2-draft",
+                                 capture_complete=False, session_completed=False,
+                                 completion_scope="capture_and_session_clock_quality")
         self._write_manifest()
 
     def _write_manifest(self):
@@ -131,7 +136,21 @@ class StartupEvidence:
         if self.manifest["sampled_host_clock_report"]["issues"]:
             self._write_manifest()
             raise ValueError("Sampled host clocks inconsistent during evidence capture")
-        self.manifest["complete"] = True
+        self.manifest["complete"] = not self.require_session_clock
+        if self.require_session_clock:
+            self.manifest["capture_complete"] = True
         self.manifest["span_sim_s"] = (self.rows[-1]["image_stamp_ns"] - self.rows[0]["image_stamp_ns"]) / 1e9
+        self._write_manifest()
+        return dict(self.manifest)
+
+    def finish_session(self, quality, *, session_succeeded):
+        if not self.require_session_clock:
+            raise ValueError("Session clock completion was not requested")
+        self.manifest["session_clock_quality"] = quality
+        self.manifest["session_completed"] = session_succeeded is True
+        self.manifest["complete"] = (self.manifest["capture_complete"]
+                                     and session_succeeded is True
+                                     and quality.get("quality_passed") is True
+                                     and not quality.get("issues", ["missing_issues"]))
         self._write_manifest()
         return dict(self.manifest)

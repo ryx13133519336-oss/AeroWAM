@@ -38,6 +38,7 @@ from .search_motion_policy import MOTION_POLICY_VERSION, RGBSearchPolicy
 from .search_motion_gate import MOTION_RULE_VERSION, MotionSearchGate, private_local_goals
 from .search_approach_reporter import APPROACH_REPORTER_VERSION
 from .startup_evidence import StartupEvidence, validate_mode as validate_startup_evidence_mode
+from .startup_clock import StartupClockMonitor, finalize_startup_clock
 from .teammate_response import (RESPONSE_PROFILES, ResponseSpec, TeammateResponse,
                                 audit_response_trace, request_control)
 
@@ -177,6 +178,7 @@ def run_condition(args, bound, output):
     spin_stop = threading.Event()
     spin_health = {"iterations": 0}
     requests = []
+    startup_monitor = evidence = None
 
     def spawn(name, argv, env, cwd):
         log = (private / f"{name}.log").open("xb")
@@ -187,6 +189,8 @@ def run_condition(args, bound, output):
         return process
 
     def check_processes():
+        if startup_monitor is not None:
+            startup_monitor.check()
         failed = [f"{name}:{p.returncode}" for name, p in processes if p.poll() is not None]
         if failed or spin_error:
             raise RuntimeError("Session process/executor failed: " + str(failed + spin_error))
@@ -236,6 +240,9 @@ def run_condition(args, bound, output):
         return stamp, images, private_frames
 
     try:
+        if getattr(args, "startup_evidence_frames", 0):
+            startup_monitor = StartupClockMonitor(private / "startup_host_clocks.json")
+            startup_monitor.start()
         env = dict(os.environ)
         env["GZ_SIM_RESOURCE_PATH"] = str(args.px4_root / "Tools/simulation/gz/models") + os.pathsep + env.get("GZ_SIM_RESOURCE_PATH", "")
         env.pop("GZ_SIM_SERVER_CONFIG_PATH", None)
@@ -383,7 +390,7 @@ def run_condition(args, bound, output):
         if getattr(args, "startup_evidence_frames", 0):
             # No PX4ControlLink or SearchFlightControl exists in this mode.
             evidence = StartupEvidence(private / "startup_evidence", args.startup_evidence_frames,
-                                       summary["scene_sha256"])
+                                       summary["scene_sha256"], require_session_clock=True)
             evidence_deadline, after = time.monotonic() + 15., -250_000_000
             while len(evidence.rows) < args.startup_evidence_frames:
                 check_processes()
@@ -589,21 +596,42 @@ def run_condition(args, bound, output):
                 ros.destroy_node()
             if rclpy_started:
                 rclpy.shutdown()
+        except Exception as exc:
+            summary.setdefault("cleanup_errors", []).append(f"session_cleanup:{type(exc).__name__}:{exc}")
+            if startup_monitor is None:
+                raise
         finally:
             # Even a log/disk/ROS shutdown error must not skip process cleanup.
-            summary.setdefault("cleanup_errors", []).extend(stop_owned(processes))
-            if gui is not None:
-                summary.setdefault("cleanup_errors", []).extend(stop_owned([("gui", gui)]))
-            for log in logs:
-                log.close()
-            for key, value in previous_env.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
-            signal.signal(signal.SIGINT, previous_handler)
-            summary["owned_processes_stopped"] = all(p.poll() is not None for _, p in processes)
-            write_json(private / "summary.json", summary)
+            try:
+                groups = [processes]
+                if gui is not None:
+                    groups.append([("gui", gui)])
+                for group in groups:
+                    try:
+                        summary.setdefault("cleanup_errors", []).extend(stop_owned(group))
+                    except Exception as exc:
+                        summary.setdefault("cleanup_errors", []).append(f"process_cleanup:{type(exc).__name__}:{exc}")
+                        if startup_monitor is None:
+                            raise
+            finally:
+                for log in logs:
+                    try:
+                        log.close()
+                    except Exception as exc:
+                        summary.setdefault("cleanup_errors", []).append(f"log_close:{type(exc).__name__}:{exc}")
+                        if startup_monitor is None:
+                            raise
+                for key, value in previous_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+                signal.signal(signal.SIGINT, previous_handler)
+                summary["owned_processes_stopped"] = (all(p.poll() is not None for _, p in processes)
+                                                       and (gui is None or gui.poll() is not None))
+                if startup_monitor is not None:
+                    finalize_startup_clock(startup_monitor, summary, evidence)
+                write_json(private / "summary.json", summary)
     return summary
 
 

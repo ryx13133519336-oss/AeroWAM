@@ -171,6 +171,12 @@ python3 -B -m benchmark.px4_gazebo.model_handoff.collection_quality_self_test
 ```
 
 输出独占创建，请使用新文件名。该工具不会调整系统时钟、停止NTP或切换clocksource。
+无解锁启动证据模式另启用 `aerowam-startup-session-clock-quality/1-draft`：从传输
+初始化前至自有进程清理后连续采样，10ms时钟检查之外，要求三路主机时钟可用、
+起止boot/clocksource一致和实际采样间隔不超过250ms（目标50ms）。manifest `/2-draft`
+只在局部帧采样、连续时钟及清理条件均通过后标记最终`complete=true`；旧`/1-draft`
+局部通过不补写为整个会话通过。没有曝光对齐或分支恢复保证，详见STARTUP_EVIDENCE_CN.md。
+
 2026-10-18起报告显式标记 `aerowam-host-clock-analysis/2-draft`：保留相邻10ms检查，
 另检查整段读取区间所能证明的偏移幅度，防止慢漂移被高采样频率漏检。
 这加强了诊断，不更改旧文件、任务成功率或 trace_receive_quality 的既有定义。

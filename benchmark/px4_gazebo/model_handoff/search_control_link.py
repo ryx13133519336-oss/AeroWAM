@@ -113,6 +113,13 @@ class PX4ControlLink:
         return self.verified
 
     def diagnostics(self):
+        # Teardown can race an externally closed ROS context. Failure to query
+        # discovery is not evidence of zero readers, nor a reason to lose the
+        # episode result or skip the remaining cleanup. poll() remains strict.
+        try:
+            counts, counts_error = self.reader_counts(), None
+        except Exception as exc:
+            counts, counts_error = None, f"{type(exc).__name__}:{exc}"
         endpoints = {}
         for topics in self.topics.values():
             for topic in topics:
@@ -125,6 +132,7 @@ class PX4ControlLink:
                 except Exception as exc:
                     endpoints[topic] = {"diagnostic_error": f"{type(exc).__name__}:{exc}"}
         return {"schema": "aerowam-search-control-link/1", "phase": self.phase, "reason": self.reason,
-                "verified": self.verified, "reader_counts": self.reader_counts(), "endpoints": endpoints,
+                "verified": self.verified, "reader_counts": counts, "reader_counts_error": counts_error,
+                "endpoints": endpoints,
                 "history": self.history, "preflight_commands": self.commands,
                 "setpoint_execution_verified": False}

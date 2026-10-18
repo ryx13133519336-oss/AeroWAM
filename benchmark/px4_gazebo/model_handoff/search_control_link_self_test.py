@@ -143,6 +143,22 @@ class ControlLinkTests(unittest.TestCase):
         self.assertEqual(result["history"][-1]["reason"], "control_link_match_timeout")
         self.assertFalse(result["setpoint_execution_verified"])
 
+    def test_closed_context_diagnostics_do_not_invent_reader_counts(self):
+        self.link.fail("control_link_ack_timeout")
+        with patch.object(self.link, "reader_counts", side_effect=RuntimeError("context invalid")):
+            result = self.link.diagnostics()
+        self.assertIsNone(result["reader_counts"])
+        self.assertIn("context invalid", result["reader_counts_error"])
+        self.assertEqual(result["reason"], "control_link_ack_timeout")
+        self.assertFalse(result["verified"])
+
+    def test_diagnostic_guard_does_not_soften_live_gate(self):
+        with patch.object(self.link, "reader_counts", side_effect=RuntimeError("context invalid")):
+            with self.assertRaisesRegex(RuntimeError, "context invalid"):
+                self.link.poll([], self.status, self.received)
+        self.assertFalse(self.link.commands)
+        self.assertFalse(self.link.verified)
+
 
 if __name__ == "__main__":
     unittest.main()

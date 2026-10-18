@@ -73,6 +73,31 @@ def run_progress(episode, policy):
             "public_search_diagnostics": getattr(policy, "diagnostics", {})}
 
 
+def init_pilot_ros(rclpy):
+    # Python's SIGINT must reach our try/finally before ROS shuts down: the
+    # executor must remain alive to publish ordinary landing commands.
+    from rclpy.signals import SignalHandlerOptions
+    rclpy.init(args=[], signal_handler_options=SignalHandlerOptions.NO)
+
+
+def interrupt_pilot(signum, frame):
+    raise KeyboardInterrupt(f"pilot_signal_{signum}")
+
+
+def save_control_link_diagnostics(link, summary, private):
+    """Best-effort teardown diagnostics, never a replacement for gate evidence."""
+    try:
+        diagnostic = link.diagnostics()
+        summary["control_link_verified"] = link.verified
+        summary["input_reader_counts"] = diagnostic["reader_counts"]
+        summary["preflight_command_publications"] = len(link.commands)
+        if diagnostic.get("reader_counts_error"):
+            summary["control_link_diagnostic_error"] = diagnostic["reader_counts_error"]
+        write_json(private / "control_link.json", diagnostic)
+    except Exception as exc:
+        summary["control_link_diagnostic_error"] = f"{type(exc).__name__}:{exc}"
+
+
 def inspect_agent(path):
     executable = path.resolve()
     if not executable.is_file() or not os.access(executable, os.X_OK):
@@ -170,6 +195,7 @@ def run_condition(args, bound, output):
     transport = ros = executor = control = control_link = None
     spin_thread = None
     rclpy_started = False
+    previous_sigterm = None
     lock = threading.Lock()
     frames, odometry, status, received, counts = {}, {}, {}, {}, {}
     clock = {"stamp": -1, "received": -math.inf}
@@ -271,8 +297,9 @@ def run_condition(args, bound, output):
         else:
             policy = RGBSearchPolicy() if args.policy == "rgb_search" else RGBScanPolicy()
         transport = Node()
-        rclpy.init(args=[])
+        init_pilot_ros(rclpy)
         rclpy_started = True
+        previous_sigterm = signal.signal(signal.SIGTERM, interrupt_pilot)
         ros = rclpy.create_node("aerowam_search_pilot")
         # Advertise all actual control writers before PX4/DDS discovery.
         # No control messages are sent until startup and the no-arm gate.
@@ -534,6 +561,8 @@ def run_condition(args, bound, output):
         episode.observation_error(f"{type(exc).__name__}:{exc}")
     finally:
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
         try:
             if control is not None:
                 control.land()
@@ -561,11 +590,7 @@ def run_condition(args, bound, output):
             summary["stream_diagnostics"] = stream_diagnostics()
             summary["executor_iterations"] = spin_health["iterations"]
             if control_link is not None:
-                link_diagnostic = control_link.diagnostics()
-                summary["control_link_verified"] = control_link.verified
-                summary["input_reader_counts"] = link_diagnostic["reader_counts"]
-                summary["preflight_command_publications"] = len(control_link.commands)
-                write_json(private / "control_link.json", link_diagnostic)
+                save_control_link_diagnostics(control_link, summary, private)
             try:
                 summary["teammate_response_audit"] = audit_response_trace(
                     response_spec, response_trace,
@@ -595,7 +620,7 @@ def run_condition(args, bound, output):
             if ros is not None:
                 ros.destroy_node()
             if rclpy_started:
-                rclpy.shutdown()
+                rclpy.try_shutdown()
         except Exception as exc:
             summary.setdefault("cleanup_errors", []).append(f"session_cleanup:{type(exc).__name__}:{exc}")
             if startup_monitor is None:
@@ -627,6 +652,8 @@ def run_condition(args, bound, output):
                     else:
                         os.environ[key] = value
                 signal.signal(signal.SIGINT, previous_handler)
+                if previous_sigterm is not None:
+                    signal.signal(signal.SIGTERM, previous_sigterm)
                 summary["owned_processes_stopped"] = (all(p.poll() is not None for _, p in processes)
                                                        and (gui is None or gui.poll() is not None))
                 if startup_monitor is not None:

@@ -460,3 +460,26 @@ export HF_HUB_OFFLINE=1
 实验按experimental-design的配对/分组原则处理：三方法保留相同人工指令、答案
 与场景，并记录/平衡方法顺序。同场景条件是一组，不拆到训练/测试两边；指令数、
 帧数不能当独立场景数。一个场景正对照成功只证明接线/可完成性，不证明组合迁移。
+
+### 中断退出修复与门控尝试（2026-10-18）
+
+中断时默认rclpy信号处理会提前关闭上下文，原清理流程随后查询订阅数量可能抛出
+`publisher's context is invalid`，并跳过任务结果写入。现由Python处理SIGINT、
+SIGTERM进入原普通降落/清理流程，ROS上下文保持到清理末尾；关闭使用幂等
+`try_shutdown`。退出诊断查询失败时reader_counts明确为null并保留错误，不伪造
+零订阅或改变实时match/ACK门槛；诊断失败不覆盖原任务失败原因。
+
+Windows与WSL/ROS各33项针对性回归通过。实际ROS上下文验证了两种信号均进入
+Python中断且上下文仍可用，以及外部已关闭上下文时诊断和重复关闭均安全。
+这属于退出修复验证，不是模型任务成绩。
+
+`model_exitfix_pilot_20261018_v1`只运行一次门控尝试，未修改同步服务、内核校时
+参数、权重或预算。原20秒预检400样本通过，模型启动监测至7.521827268秒时，
+RAW相对MONOTONIC偏移变化下界32.524878ms，超过原10ms门槛而中止。尚未起飞，
+成功模型动作0；保存结果`simulator_error/pilot_interrupted`、cleanup_errors为空、
+owned_processes_stopped=true。外部记录保留真正中止原因whole_session_clock_gate_failed。
+该旧固定角色场景不是无固定角色组合迁移测评，不能计入模型成功率。
+
+本次只读追踪直接捕获timesyncd的clock_adjtime写调用，但不解释此前服务停止时
+出现的参数变化。VM根层进程仍受权限限制，不将未捕获的调用者归因于模型、
+Gazebo或WSL init；后续需要管理员只读诊断，不能用重复启动或放宽门槛替代定位。

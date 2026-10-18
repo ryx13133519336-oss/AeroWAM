@@ -2,6 +2,8 @@
 
 from dataclasses import replace
 from io import BytesIO
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -15,7 +17,8 @@ from .search_episode import SearchEpisode
 from .search_flight_control import SearchFlightControl, public_state, safety_problem, px4_topic
 from .search_pilot_scene import manual_condition, paired_conditions
 from .search_reporter import GroundedCheckpointPolicy, PilotReporter, color_box, requested_color
-from .search_pilot import agent_major_from_dependencies, resolve_run_duration, run_progress
+from .search_pilot import (agent_major_from_dependencies, resolve_run_duration, run_progress,
+                          init_pilot_ros, interrupt_pilot, save_control_link_diagnostics)
 from .teammate_response import ResponseSpec, TeammateResponse, request_control, audit_response_trace
 
 RED_BOX, BLUE_BOX = (40 / 256, 60 / 256, 91 / 256, 111 / 256), (160 / 256, 80 / 256, 211 / 256, 131 / 256)
@@ -53,6 +56,47 @@ def complete(private_target, text):
 
 
 class SearchPilotTests(unittest.TestCase):
+    def test_sigterm_enters_the_same_graceful_finally_as_keyboard_interrupt(self):
+        import signal
+        with self.assertRaisesRegex(KeyboardInterrupt, f"pilot_signal_{signal.SIGTERM}"):
+            interrupt_pilot(signal.SIGTERM, None)
+
+    def test_ros_context_stays_live_for_python_interrupt_cleanup(self):
+        from unittest.mock import Mock
+        ros = Mock()
+        signals = SimpleNamespace(SignalHandlerOptions=SimpleNamespace(NO=object()))
+        with patch.dict("sys.modules", {"rclpy.signals": signals}):
+            init_pilot_ros(ros)
+        ros.init.assert_called_once_with(args=[], signal_handler_options=signals.SignalHandlerOptions.NO)
+
+    def test_failed_teardown_diagnostic_preserves_interrupt_result(self):
+        from unittest.mock import Mock
+        episode = SearchEpisode(manual_condition("找蓝色方块并确认", "blue"), "interrupted")
+        episode.observation_error("pilot_interrupted")
+        summary = episode.finish()
+        original = dict(summary)
+        link = Mock()
+        link.diagnostics.side_effect = RuntimeError("publisher's context is invalid")
+        with tempfile.TemporaryDirectory() as folder:
+            save_control_link_diagnostics(link, summary, Path(folder))
+        for key, value in original.items():
+            self.assertEqual(summary[key], value)
+        self.assertIn("context is invalid", summary["control_link_diagnostic_error"])
+        self.assertEqual(summary["category"], "simulator_error")
+        self.assertNotIn("control_link_verified", summary)
+
+    def test_failed_diagnostic_write_does_not_replace_episode_failure(self):
+        from unittest.mock import Mock
+        link = Mock(verified=False, commands=[])
+        link.diagnostics.return_value = {"reader_counts": None, "reader_counts_error": "closed context"}
+        summary = {"category": "simulator_error", "reason": "pilot_interrupted"}
+        with patch("benchmark.px4_gazebo.model_handoff.search_pilot.write_json", side_effect=OSError("disk full")):
+            save_control_link_diagnostics(link, summary, Path("unused"))
+        self.assertEqual((summary["category"], summary["reason"]), ("simulator_error", "pilot_interrupted"))
+        self.assertIsNone(summary["input_reader_counts"])
+        self.assertIn("disk full", summary["control_link_diagnostic_error"])
+
+
     def test_run_duration_wall_budget_is_bounded_and_explicit(self):
         self.assertEqual(resolve_run_duration("rgb_search"), 90.)
         self.assertEqual(resolve_run_duration("rgb_search", 60.), 60.)

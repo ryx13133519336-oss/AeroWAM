@@ -128,28 +128,39 @@ def _joint_action(payload):
         raise ValueError("Do not silently clip an adapter output")
 
 
-def check_saved_io(interface, request, response):
-    """Check saved public bytes only; never invokes a model or a flight runner."""
+def check_request(interface, request):
+    """Validate the declared public protocol before invoking any adapter."""
     from .decision_interface import DECISION_PROTOCOL_VERSION, DecisionRequest
-    from .grounded_interface import GroundedAction, validate_observed_reports
     from .interface_check import check
-    from .protocol import ModelObservation, assert_truth_free
+    from .protocol import ModelObservation
     _choice(interface, INTERFACES)
-    assert_truth_free(response)
     if interface == "candidate_prediction":
         if request.get("protocol") != DECISION_PROTOCOL_VERSION:
             raise ValueError("Candidate prediction requires an explicit candidate request")
         parsed = DecisionRequest.from_wire(request)
         if any(step.action.intent != "none" for c in parsed.candidates for step in c.steps):
             raise ValueError("Legacy directed candidate intent unavailable in unassigned profile")
+        check(request)
+        return parsed
+    parsed = ModelObservation.from_wire(request)
+    check(request)
+    return parsed
+
+
+def check_saved_io(interface, request, response):
+    """Check saved public bytes only; never invokes a model or a flight runner."""
+    from .grounded_interface import GroundedAction, validate_observed_reports
+    from .interface_check import check
+    from .protocol import assert_truth_free
+    parsed = check_request(interface, request)
+    assert_truth_free(response)
+    if interface == "candidate_prediction":
         check(request, response)
     else:
-        observation = ModelObservation.from_wire(request)
-        check(request)  # Decode original RGB; do not manufacture missing modalities.
         if interface == "grounded_action":
             envelope = GroundedAction.from_wire(response)
             _joint_action(response["action"])
-            validate_observed_reports(envelope, observation)
+            validate_observed_reports(envelope, parsed)
         else:
             _joint_action(response)
 

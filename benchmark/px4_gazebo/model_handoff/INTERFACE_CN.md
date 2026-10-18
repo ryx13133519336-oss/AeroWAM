@@ -69,6 +69,12 @@ RGB输入权限、方法自身角色属性、来源/原生输出/转换组件、
 未改变。运行设施分层、清单字段、命令及后续接线要求见
 [ADAPTER_RUNTIME_CN.md](ADAPTER_RUNTIME_CN.md)。
 
+清单另可通过 `adapter_server --manifest --entry-artifact --run-dir` 启动诊断服务：
+核验并显式编译所选入口源码，记录实际进程，单episode且拒绝并发排队，按声明检查
+请求/响应，后端/发送故障后封锁复用。旧 `--factory` 入口不变。这里没有认证权重
+实际消费、全部依赖或GPU执行，不能取消任意后台推理，尚不能用于飞行准入；
+400ms客户端预算不变。具体支持范围、记录与92项回归证据见上述设计文档新增小节。
+
 ## 候选条件预测与选择
 
 `decision_interface.py` 定义请求、响应、外部 `DecisionAdapter` 和 `DecisionClient`。

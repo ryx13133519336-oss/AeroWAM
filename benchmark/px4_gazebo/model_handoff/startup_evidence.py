@@ -5,7 +5,7 @@ import json
 import math
 from pathlib import Path
 
-from .clock_probe import LIMIT_NS, analyze as analyze_clocks
+from .clock_probe import ANALYSIS_PROFILE, LIMIT_NS, analyze as analyze_clocks, environment
 
 
 def validate_mode(count, *, execute_flight, control_link_check, policy, teammate_response):
@@ -40,6 +40,7 @@ class StartupEvidence:
             "receive_age_limits_s": {"status": 2., "odometry": .5, "camera": .25, "clock": .5},
             "image_clock_lag_limit_ns": 200_000_000,
             "sampled_host_clock_offset_change_limit_ns": LIMIT_NS,
+            "clock_analysis_profile": ANALYSIS_PROFILE, "environment": environment(),
             "sampling": "latest_received_state_with_same_stamp_dual_rgb_and_labels",
             "complete": False, "captured_frames": 0, "start_matched": False,
             "full_state_restored": False, "exposure_state_aligned": False,
@@ -125,6 +126,7 @@ class StartupEvidence:
     def finish(self):
         if len(self.rows) != self.count:
             raise ValueError("Incomplete startup evidence")
+        self.manifest["environment_after"] = environment()
         self.manifest["sampled_host_clock_report"] = analyze_clocks([r["host_clocks"] for r in self.rows])
         if self.manifest["sampled_host_clock_report"]["issues"]:
             self._write_manifest()

@@ -171,6 +171,12 @@ python3 -B -m benchmark.px4_gazebo.model_handoff.collection_quality_self_test
 ```
 
 输出独占创建，请使用新文件名。该工具不会调整系统时钟、停止NTP或切换clocksource。
+2026-10-18起报告显式标记 `aerowam-host-clock-analysis/2-draft`：保留相邻10ms检查，
+另检查整段读取区间所能证明的偏移幅度，防止慢漂移被高采样频率漏检。
+这加强了诊断，不更改旧文件、任务成功率或 trace_receive_quality 的既有定义。
+`--input saved_probe.json --output new_analysis.json` 可独立重分析旧原始采样，
+保存源文件SHA256；不能与duration/interval并用。boot/uptime/clocksource现在记录起止两份。
+新版本界限、真实漏检反例和系统级诊断状态见 CLOCK_DIAGNOSIS_CN.md。
 若 UNIX 单独异常而 raw/boottime 与 monotonic 稳定，说明异常可存在于host实时时钟，
 仍不能直接推断NTP/WSL具体责任。系统级修复和运行环境复验需独立处理。
 

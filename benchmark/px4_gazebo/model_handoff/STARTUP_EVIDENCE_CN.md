@@ -159,7 +159,7 @@ clock0.003053秒。图像跨度1.848仿真秒。这些仍是接收时状态，�
 时钟记录/拒绝逻辑，再决定新环境验证；不放宽门槛、不给模型oracle输入。主线继续
 保持无永久角色分工的协作技能与世界模型预测组合迁移；本轮没有产生该主线的成绩。
 
-## 连续会话门控实现：离线验证完成，尚无新runner实测
+## 连续会话门控实现：离线阶段记录
 
 `search_pilot --startup-evidence-frames`现已自动启用 `startup_clock`。监测在ROS/Gazebo
 传输初始化和任何自有进程启动之前开始，在ROS关闭、自有进程停止及日志关闭之后
@@ -195,5 +195,66 @@ runner始终显式要求会话门控，不将旧API或旧记录视为新版本�
 另对上轮879条保存数据只读应用新质量函数：因16.821862ms整段raw幅度拒绝，新增
 覆盖条件在这份记录中没有额外issue。Windows/WSL重分析完全一致，源文件和旧
 manifest哈希未变；新报告另存私有 `session_gate_reanalysis_20261018_v1.json`。
-不重写旧`complete=true`，不声称已用新runner完成实际采样。新环境实测、曝光时
+不重写旧`complete=true`，此阶段尚未用新runner完成实际采样。新环境实测、曝光时
 状态对齐、候选同起点匹配和世界模型预测成绩仍待完成。
+
+## 2026-10-18新runner实测：局部采齐，全程门控正确拒绝
+
+基于 `df8ceee` 运行一次无解锁、无起飞启动复验，时间同步服务保持原设置；没有
+再次暂停服务或调整系统时间。启动等待预算固定110秒，8组帧的收集预算沿用15秒，
+不重试，不调用策略或训练。私有目录：
+`D:/AeroWAM-data/startup_session_gate_live_20261018_v1/`。
+
+```bash
+python3 -B -u -m benchmark.px4_gazebo.model_handoff.search_pilot \
+  --px4-root /home/ryx/PX4-Autopilot \
+  --models /mnt/d/AeroWAM-data/annotation_models_v1 \
+  --agent /mnt/d/AeroWAM-data/tools/microxrce_agent_v242_humble/MicroXRCEAgent \
+  --policy rgb_scan --startup-evidence-frames 8 --startup-timeout 110 \
+  --instruction "Find the blue cube and have the other UAV confirm it" \
+  --expected-target blue \
+  --output-dir /mnt/d/AeroWAM-data/startup_session_gate_live_20261018_v1
+```
+
+英文指令及私有蓝色评分目标只用于满足启动入口合同，此模式没有向模型发送观测
+或指令，不产生搜索/确认成绩。场景身份仍为
+`e22a0eaa3108a4810e59e5e733c3a5180bc5e3598ef147e165f3050475799a38`。
+该身份按XML根序列化计算，不能与包含XML声明的world.sdf文件字节哈希混用。
+起止boot一致：`68447553-0d1b-4e6c-acd6-d36024ce6064`，clocksource为tsc。
+
+| 检查范围 | 样本数 | monotonic跨度/秒 | raw偏移幅度下界/ms | 结果 |
+| --- | ---: | ---: | ---: | --- |
+| 双机帧采样窗口 | 8 | 4.529476837 | 1.390176 | 局部通过 |
+| 传输初始化前至自有进程清理后 | 717 | 36.206730070 | 16.717833 | 拒绝 |
+
+启动流等待27.197668601秒，图像跨度1.848仿真秒。全程最大实际采样间隔182.993974ms，
+未超过250ms覆盖限制；raw相邻最大偏移差0.842253ms，realtime/boottime整段幅度下界
+均0，monitor_errors为空。本轮只有 `clock_offset_excursion`，没有监测线程或清理
+故障。raw首末净偏移区间约[2.343666, 2.344147]ms，仍不足以替代16.717833ms整段幅度。
+
+manifest `/2-draft` 如实保存 `capture_complete=true`、`session_completed=true`、
+`complete=false`。summary最终为 `simulator_error/startup_session_quality_failed`，
+`startup_receive_quality_passed=false`；`result_before_startup_clock_gate`保留原本的
+`startup_only/no_motion_commands_requested`，CLI非零退出。pair_summary同样记录
+simulator_error。真实runner已验证局部采齐后不会把全程不合格记录误标完成；这不是
+环境修复验证，也没有真实全程质量通过的结果。
+
+私有 `verify_evidence.py` 独立核对全部64个文件的SHA256/长度，WSL另反序列化32份
+1280×960 RGB/labels protobuf及32份ROS CDR，与JSON中的时间戳、状态/位姿等字段
+一致。两机8组记录均未解锁且无failsafe，动作请求/ACK均0，无control_link或
+flight_diagnostics，自有进程停止且cleanup_errors为空；退出后独立pgrep没有发现
+PX4/Gazebo/Agent或其他采集任务残留。服务前后只读检查均active/running、enabled，
+没有改变其设置；这些端点检查不证明服务在整个区间的内部同步状态。
+
+接收年龄保守上界：status0.991257秒、odometry0.052065秒、camera0.110312秒、
+clock0.030344秒；仍不能当作曝光状态对齐。Windows独立重算连续时钟及局部报告、
+核验64份文件，除WSL额外解码的标记外，两端复核报告完全相同。关键原始哈希：
+
+- startup_host_clocks.json：`140e6b9277892d89bbbd6485ca447de0b68af0dbef3ded7e1d3e939c52d69eb0`
+- startup_evidence/manifest.json：`e1720f5994dac5ba0d6a5906c5ae6ff2b11769c9a78e558b73e9bcd4279a34fc`
+- startup_evidence/samples.jsonl：`d63242f1a0aa9e070cdf7585799aedc6bd2bea9c22ec1d448376ae10405d3c31`
+
+保留原始失败证据，不晋升训练或候选分支数据。与此前暂停服务轮次boot不同，不据此
+作暂停/未暂停的因果比较，不唯一归因于NTP、WSL或残留slew。当前连续门控已完成
+一次真实拒绝路径验证；可用环境、曝光状态对齐、候选起点匹配和组合迁移成绩仍待
+解决。本轮不追加仿真或系统干预，不放宽10ms/400ms限制；无人机没有永久角色分工。

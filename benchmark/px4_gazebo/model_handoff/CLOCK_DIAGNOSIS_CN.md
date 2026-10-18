@@ -154,3 +154,21 @@ Windows与WSL独立从1194条原始时钟采样重算，并核验上下文状态
 间隙的draft覆盖规则。26项新增故障/runner接线回归及原232项在Windows/WSL各
 258项通过；上述879条真实旧数据被新函数正确拒绝，两端重分析一致且源文件未改。
 这只是离线实现与故障拒绝验证，不是环境修复或新runner实测。详见启动证据文档末节。
+
+## 新runner保持服务原状的单次实测
+
+2026-10-18，`df8ceee` 新runner完成一次不解锁、不起飞启动，未暂停同步服务，
+无策略调用或训练。8组双机帧局部raw幅度下界1.390176ms通过，但从传输初始化
+前到自有进程清理后的717点/36.206730070秒连续记录raw幅度下界16.717833ms，
+触发整段10ms门槛。最大实际采样间隔182.993974ms通过250ms覆盖规则，其余
+realtime/boottime幅度下界均0；没有监测或清理错误。
+
+最终manifest明确 `capture_complete=true`、`session_completed=true`、`complete=false`，
+summary为 `simulator_error/startup_session_quality_failed`，原startup_only结果另存。
+Windows/WSL离线重算完全一致，64份原始文件核验，WSL全部解码通过；无动作/ACK，
+自有进程已停止，服务前后active/running、enabled。原始记录及复核脚本留在私有
+`startup_session_gate_live_20261018_v1/`，详细口径及哈希见 STARTUP_EVIDENCE_CN.md。
+
+这完成新runner真实拒绝路径验证，没有修复环境或产生模型/迁移成绩。与暂停轮次
+boot不同，不能作服务效果的因果比较；没有额外逐时内核参数证据，根因仍未唯一
+确定。不追加系统改动或仿真，不放宽质量门槛；新数据采集仍受该门控约束。

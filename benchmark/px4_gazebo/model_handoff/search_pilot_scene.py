@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 from .annotation_models import CAMERA_MODEL, LABEL_SENSOR, verify
 from .annotation_session_smoke import build_world
 from .fixtures import Appearance
-from .language_tasks import LanguageTask, paired_target_tasks
+from .language_tasks import LanguageTask, paired_target_tasks, role_free_task
 
 WORLD = "aerowam_search_pilot"
 OBJECTS = {"probe_red": Appearance("red", "sphere", "black"),
@@ -21,7 +21,7 @@ OCCLUSION_CASES = ("search_clear", "search_blocked", "search_revealed")
 OCCLUSION_WORLD = "aerowam_search_occlusion_probe"
 
 
-def manual_condition(instruction, expected_color):
+def manual_condition(instruction, expected_color, *, role_mode="fixed"):
     """Human-authored text + separate private scoring annotation.
 
     Do not infer the evaluator answer using the policy's color parser.
@@ -30,16 +30,20 @@ def manual_condition(instruction, expected_color):
     if expected_color not in {"red", "blue"}:
         raise ValueError("Choose the private expected red/blue object")
     descriptor = next(value for value in OBJECTS.values() if value.color == expected_color)
+    if role_mode == "unassigned":
+        return role_free_task("search", descriptor, instruction=instruction).bind(OBJECTS)
+    if role_mode != "fixed":
+        raise ValueError("Unsupported role mode")
     return LanguageTask("search", instruction, descriptor).bind(OBJECTS)
 
 
-def paired_conditions(seed=0):
+def paired_conditions(seed=0, *, role_mode="fixed"):
     """Randomized instruction order, private answers, one scene-level group.
 
     Identical scene and initial conditions must be recreated per condition.
     Each method gets this same order; opaque run IDs must not encode answers.
     """
-    conditions = list(paired_target_tasks("search", OBJECTS))
+    conditions = list(paired_target_tasks("search", OBJECTS, role_mode=role_mode))
     random.Random(seed).shuffle(conditions)
     return tuple(conditions)
 

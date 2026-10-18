@@ -27,16 +27,18 @@ from .annotation_session_smoke import INSTANCES, UDP_PROFILE, smoke_environment,
 from .gazebo_rasters import GZ8_INSTANCE_ENCODING, pair_rgb_instance, resize_pair
 from .images import ros_image_to_jpeg
 from .pixel_annotations import CaptureKey, annotate
-from .policy_client import PolicyClient, PolicyTimeoutError
+from .policy_client import PolicyClient, PolicyRemoteError, PolicyTimeoutError
 from .protocol import AGENT_IDS, ModelObservation
 from .search_episode import SearchEpisode
 from .search_flight_control import SearchFlightControl, px4_topic
 from .search_control_link import LOOPBACK_PROFILE, PX4ControlLink
 from .search_pilot_scene import LABELS, WORLD, manual_condition, paired_conditions, scene_digest, search_world
-from .search_reporter import REPORTER_VERSION, RGBScanPolicy, requested_color
+from .search_reporter import REPORTER_VERSION, RGBScanPolicy, SearchTravelBudgetExceeded, requested_color
 from .search_motion_policy import MOTION_POLICY_VERSION, RGBSearchPolicy
 from .search_motion_gate import MOTION_RULE_VERSION, MotionSearchGate, private_local_goals
 from .search_approach_reporter import APPROACH_REPORTER_VERSION
+from .role_free_search import (ROLE_FREE_REPORTER_VERSION, ROLE_FREE_MOTION_VERSION,
+                               RoleFreeMotionSearchGate)
 from .startup_evidence import StartupEvidence, validate_mode as validate_startup_evidence_mode
 from .startup_clock import StartupClockMonitor, finalize_startup_clock
 from .teammate_response import (RESPONSE_PROFILES, ResponseSpec, TeammateResponse,
@@ -46,8 +48,37 @@ CHECKPOINT_POLICIES = {"checkpoint", "checkpoint_search"}
 MOTION_POLICIES = {"rgb_search", "checkpoint_search"}
 
 
+def validate_search_role_mode(role_mode, policy, teammate_response="nominal"):
+    if role_mode not in {"fixed", "unassigned"}:
+        raise ValueError("Unsupported search role mode")
+    if role_mode == "unassigned" and (policy != "checkpoint_search" or teammate_response != "nominal"):
+        raise ValueError("Unassigned pilot requires checkpoint_search and nominal response; fixed-role rule policies and UAV1 perturbations are not migrated")
+
+
+def search_evidence_versions(policy, role_mode="fixed"):
+    validate_search_role_mode(role_mode, policy)
+    if role_mode == "unassigned":
+        return ROLE_FREE_REPORTER_VERSION, ROLE_FREE_MOTION_VERSION
+    reporter = APPROACH_REPORTER_VERSION if policy == "checkpoint_search" else REPORTER_VERSION
+    return reporter, MOTION_RULE_VERSION
+
+
 def write_json(path, payload):
     path.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
+
+
+def policy_failure_record(observation, exc, elapsed_ms):
+    """Retain rejected public input separately; it was never delivered/applied."""
+    reason = "policy_inference_error"
+    remote_guard = (isinstance(exc, PolicyRemoteError)
+                    and exc.remote_error == "SearchTravelBudgetExceeded"
+                    and exc.failure_code == SearchTravelBudgetExceeded.code)
+    if isinstance(exc, SearchTravelBudgetExceeded) or remote_guard:
+        reason = SearchTravelBudgetExceeded.code
+    return reason, {"observation": observation.to_wire(), "response": None,
+                    "action_applied": False, "attempt_elapsed_ms": elapsed_ms,
+                    "reason": reason, "error": f"{type(exc).__name__}:{exc}",
+                    "diagnostics": getattr(exc, "diagnostics", {})}
 
 
 def agent_major_from_dependencies(dependencies):
@@ -113,6 +144,11 @@ def inspect_agent(path):
 
 
 def run_condition(args, bound, output):
+    role_mode = getattr(args, "role_mode", "fixed")
+    validate_search_role_mode(role_mode, args.policy, args.teammate_response)
+    if bound.definition.role_mode != role_mode:
+        raise ValueError("Task and pilot role mode mismatch")
+    reporter_version, motion_version = search_evidence_versions(args.policy, role_mode)
     validate_startup_evidence_mode(getattr(args, "startup_evidence_frames", 0),
                                   execute_flight=args.execute_flight, control_link_check=args.control_link_check,
                                   policy=args.policy, teammate_response=args.teammate_response)
@@ -150,7 +186,8 @@ def run_condition(args, bound, output):
                "scene_sha256": scene_digest(tree), "model_resources": resources,
                "policy": args.policy, "method": (args.method if args.policy in CHECKPOINT_POLICIES else
                                                  MOTION_POLICY_VERSION if args.policy == "rgb_search" else "rgb_scan_positive_control"),
-               "reporter": REPORTER_VERSION, "execute_flight": args.execute_flight,
+               "reporter": reporter_version, "execute_flight": args.execute_flight,
+               "role_mode": role_mode, "learned_role_adaptation_verified": False,
                "capture_aligned_telemetry": False, "communication": "centralized_unrestricted_diagnostic",
                "compositional_evaluation": False, "training_dataset_created": False,
                "live_multitask_ready": False, "initial_target_visible": None}
@@ -161,9 +198,9 @@ def run_condition(args, bound, output):
     summary["controller_request_source"] = ("policy_request_unchanged" if response_spec.profile == "nominal"
                                              else "policy_request_with_declared_peer_response_perturbation")
     if args.policy in MOTION_POLICIES:
-        summary.update(motion_acceptance=MOTION_RULE_VERSION, target_motion="static",
+        summary.update(motion_acceptance=motion_version, target_motion="static",
                        obstacle_avoidance=False, scene_variant="original_open_arena",
-                       reporter=APPROACH_REPORTER_VERSION if args.policy == "checkpoint_search" else MOTION_POLICY_VERSION,
+                       reporter=reporter_version if args.policy == "checkpoint_search" else MOTION_POLICY_VERSION,
                        control_timestamp_source="latest_px4_odometry_roundtrip_no_extrapolation")
     if args.policy == "checkpoint_search":
         summary.update(action_source="checkpoint_only_no_rule_navigation_override",
@@ -173,6 +210,7 @@ def run_condition(args, bound, output):
                                          "object_ids": bound.object_ids, "task": bound.definition.public_context()})
     write_json(public / "metadata.json", {"schema": "aerowam-search-pilot-public/1-draft",
                                            "episode_id": episode_id, "instruction": bound.definition.instruction,
+                                           "role_mode": role_mode,
                                            "state_alignment": "latest_received_local_odometry",
                                            "action_history_semantics": "controller_requests_before_low_level_limits_not_verified_execution",
                                            "action_semantics": "body_FLU_delta_divided_by_0.5s_then_limited"})
@@ -279,14 +317,14 @@ def run_condition(args, bound, output):
             summary["checkpoint_sha256"] = hashlib.sha256(args.checkpoint.read_bytes()).hexdigest()
             spawn("policy", [str(args.policy_python), "-B", "-u", "-m", "benchmark.px4_gazebo.model_handoff.policy_server",
                              "--checkpoint", str(args.checkpoint), "--device", args.device,
-                             "--port", str(policy_port),
+                             "--port", str(policy_port), "--search-role-mode", role_mode,
                              "--grounded-search-approach" if args.policy == "checkpoint_search" else "--grounded-search-pilot"], env, Path.cwd())
             deadline = time.monotonic() + 150.
             while time.monotonic() < deadline:
                 check_processes()
                 text = (private / "policy.log").read_text(errors="replace")
                 if "serving " in text:
-                    version = APPROACH_REPORTER_VERSION if args.policy == "checkpoint_search" else REPORTER_VERSION
+                    version = reporter_version
                     if f"serving {args.method}+{version} " not in text:
                         raise ValueError("Checkpoint method differs from requested method")
                     break
@@ -467,7 +505,8 @@ def run_condition(args, bound, output):
                 check_processes()
                 time.sleep(.05)
             if args.policy in MOTION_POLICIES:
-                episode.motion_gate = MotionSearchGate(private_local_goals(tree, bound.target_id, control.yaws))
+                gate_type = RoleFreeMotionSearchGate if role_mode == "unassigned" else MotionSearchGate
+                episode.motion_gate = gate_type(private_local_goals(tree, bound.target_id, control.yaws))
             after, last_decision, wait_started = -1, -math.inf, time.monotonic()
             run_sim_started = clock["stamp"]
             print(f"RUN budget={args.duration:g} wall-clock seconds; no automatic extension", flush=True)
@@ -531,7 +570,13 @@ def run_condition(args, bound, output):
                             raise PolicyTimeoutError("Positive-control inference exceeded 400 ms")
                 except (OSError, ValueError, RuntimeError, TypeError, KeyError) as exc:
                     summary["policy_error"] = f"{type(exc).__name__}:{exc}"
-                    control.land(("model_failure", "policy_inference_error"))
+                    reason, failed_request = policy_failure_record(
+                        observation, exc, (time.monotonic() - inference_started) * 1000)
+                    control.land(("model_failure", reason))
+                    # Keep requests.jsonl restricted to responses actually
+                    # delivered. No fabricated action/latency for this attempt.
+                    write_json(public / "failed_request.json", failed_request)
+                    summary["policy_failure_diagnostics"] = failed_request["diagnostics"]
                     break
                 action = episode.delivered(observation, private_frames, response, now_sim_time_ns=clock["stamp"])
                 requests.append({"observation": observation.to_wire(), "response": response.to_wire(),
@@ -674,6 +719,8 @@ def main():
     parser.add_argument("--method", choices=("joint_bc", "dual_vln_hier", "dual_wam_mpc"), default="joint_bc")
     parser.add_argument("--policy-python", type=Path)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--role-mode", choices=("fixed", "unassigned"), default="fixed",
+                        help="Opt-in unassigned checkpoint_search: either UAV may discover; old rule pilots remain fixed-role diagnostics")
     parser.add_argument("--execute-flight", action="store_true", help="Actually arm/take off isolated SITL instances20/21; no hardware")
     parser.add_argument("--control-link-check", action="store_true", help="Verify disarm-command ACK while already disarmed; never take off")
     parser.add_argument("--startup-evidence-frames", type=int, default=0,
@@ -700,6 +747,7 @@ def main():
     if args.execute_flight and args.control_link_check:
         parser.error("--control-link-check cannot be combined with --execute-flight")
     try:
+        validate_search_role_mode(args.role_mode, args.policy, args.teammate_response)
         validate_startup_evidence_mode(args.startup_evidence_frames, execute_flight=args.execute_flight,
                                       control_link_check=args.control_link_check, policy=args.policy,
                                       teammate_response=args.teammate_response)
@@ -729,7 +777,7 @@ def main():
     if args.paired_check:
         if args.instruction is not None or args.expected_target is not None:
             parser.error("Manual instruction cannot be combined with --paired-check")
-        conditions = paired_conditions(args.seed)
+        conditions = paired_conditions(args.seed, role_mode=args.role_mode)
     else:
         instruction = args.instruction
         if instruction is None:
@@ -740,7 +788,7 @@ def main():
             expected = {"1": "red", "2": "blue", "red": "red", "blue": "blue"}.get(choice)
         try:
             requested_color(instruction)  # Refuse unsupported pilot language before starting SITL.
-            conditions = (manual_condition(instruction, expected),)
+            conditions = (manual_condition(instruction, expected, role_mode=args.role_mode),)
         except ValueError as exc:
             parser.error(str(exc))
     args.output_dir.mkdir(parents=True, exist_ok=False)
@@ -752,6 +800,7 @@ def main():
         if summary["category"] in {"simulator_error", "evaluator_error"} or not summary["owned_processes_stopped"] or summary.get("cleanup_errors"):
             break
     group = {"schema": "aerowam-search-pilot-pair/1-draft", "seed": args.seed, "independent_scene_groups": 1,
+             "role_mode": args.role_mode,
              "instruction_source": "authored_developer_pair" if args.paired_check else "manual_user_input",
              "conditions_expected": len(conditions),
              "conditions_completed": len(summaries), "scene_sha256": [s["scene_sha256"] for s in summaries],

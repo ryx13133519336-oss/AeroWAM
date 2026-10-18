@@ -30,7 +30,14 @@
 旧 `LanguageTask` 默认值、`templated_task` 和旧 search_pilot 保留 /1 固定角色兼容，
 仅供已有诊断复现，不能将旧结果重新标成角色自由 benchmark。
 旧 MotionSearchGate 与规则搜索策略仍含固定机号；SearchEpisode 构造时拒绝
-给 /2 任务挂载旧运动评分门，避免静默按旧规则评分。尚未迁移实际飞行 runner。
+给 /2 任务挂载旧运动评分门，避免静默按旧规则评分。
+
+2026-10-18新增显式 `checkpoint_search --role-mode unassigned` 接线，使用独立的
+对称辅助报告器和运动验收，不改学习动作；旧默认兼容不变。真实权重红蓝208帧录像
+复查动作与旧入口完全相同。随后已在临时校时隔离的WSL中实际起飞并完成22次
+JointBC决策，搜索因局部移动预算耗尽而失败，正常落地并完成环境恢复。
+录像重放22/22动作完全一致；不是模型动态分工/组合迁移成绩。证据和边界见
+[JOINTBC_SEARCH_FAILURE_CN.md](JOINTBC_SEARCH_FAILURE_CN.md)，校时入口见WSL_CLOCK_CN.md。
 
 ## AeroDuo 来源与适配审计
 

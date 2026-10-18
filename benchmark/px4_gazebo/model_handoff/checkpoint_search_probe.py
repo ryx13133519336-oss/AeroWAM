@@ -20,6 +20,7 @@ from .policy_server import InferencePolicy, ReusableThreadingTCPServer, _Handler
 from .protocol import AGENT_IDS, ModelObservation
 from .search_reporter import REPORTER_VERSION
 from .search_approach_reporter import APPROACH_REPORTER_VERSION
+from .role_free_search import ROLE_FREE_REPORTER_VERSION
 
 PROBE_SCHEMA = "aerowam-checkpoint-search-probe/1"
 
@@ -99,7 +100,10 @@ def main():
     parser.add_argument("--limit", type=int, default=120)
     parser.add_argument("--reporter", choices=("scan", "approach"), default="scan",
                         help="approach only changes auxiliary reports, never checkpoint actions")
+    parser.add_argument("--role-mode", choices=("fixed", "unassigned"), default="fixed")
     args = parser.parse_args()
+    if args.role_mode == "unassigned" and args.reporter != "approach":
+        parser.error("Unassigned roles require --reporter approach")
     if args.output_dir.exists():
         parser.error("Output directory must be new; existing evidence is never overwritten")
     try:
@@ -113,7 +117,9 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=False)
     summary = {"schema": PROBE_SCHEMA, "checkpoint": str(args.checkpoint.resolve()),
                "checkpoint_sha256": checkpoint_hash, "requested_method": args.method,
-               "reporter": APPROACH_REPORTER_VERSION if args.reporter == "approach" else REPORTER_VERSION,
+               "reporter": (ROLE_FREE_REPORTER_VERSION if args.role_mode == "unassigned" else
+                            APPROACH_REPORTER_VERSION if args.reporter == "approach" else REPORTER_VERSION),
+               "role_mode": args.role_mode,
                "action_source": "checkpoint_only_no_rule_navigation_override",
                "timeout_ms": 400, "device": args.device,
                "task_success_evaluated": False, "closed_loop_evaluated": False,
@@ -127,7 +133,7 @@ def main():
         if model.config.method != args.method:
             raise ValueError("Checkpoint method differs from requested method")
         print(f"Loaded {model.config.method}; checkpoint read-only; no flight", flush=True)
-        adapter, _ = search_composite(model, approach=args.reporter == "approach")
+        adapter, _ = search_composite(model, approach=args.reporter == "approach", role_mode=args.role_mode)
         with ReusableThreadingTCPServer(("127.0.0.1", 0), _Handler) as server:
             server.policy = adapter
             thread = threading.Thread(target=server.serve_forever, daemon=True)

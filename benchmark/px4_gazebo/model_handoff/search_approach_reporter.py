@@ -9,7 +9,7 @@ import math
 
 from .language_tasks import TargetReport
 from .protocol import AGENT_IDS
-from .search_reporter import color_box, reportable_box, requested_color
+from .search_reporter import check_search_travel, color_box, reportable_box, requested_color
 
 APPROACH_REPORTER_VERSION = "pilot_rgb_approach_reporter/1"
 
@@ -35,8 +35,7 @@ class ApproachReporter:
         for agent in AGENT_IDS:
             if observation.image_timestamp_ns[agent] <= self.previous[agent]:
                 raise ValueError("Approach reporter requires advancing camera frames")
-            if math.dist(observation.states[agent].position[:2], self.initial[agent][:2]) > 2.5:
-                raise RuntimeError("RGB search local travel budget exceeded")
+        check_search_travel(observation, self.initial)
         self.previous = dict(observation.image_timestamp_ns)
         found_before = self.found_stamp
         reports, diagnostics = [], {}

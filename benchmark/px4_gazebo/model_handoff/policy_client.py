@@ -16,6 +16,14 @@ class PolicyTimeoutError(TimeoutError):
     pass
 
 
+class PolicyRemoteError(RuntimeError):
+    def __init__(self, response):
+        super().__init__(f"policy server {response.get('error')}: {response.get('message', '')}")
+        self.remote_error = response.get("error")
+        self.failure_code = response.get("failure_code")
+        self.diagnostics = response.get("diagnostics", {})
+
+
 def _remaining(deadline: float) -> float:
     remaining = deadline - time.perf_counter()
     if remaining <= 0:
@@ -71,9 +79,7 @@ class PolicyClient:
                 response: Any = json.loads(_receive_exact(connection, size, deadline))
                 _remaining(deadline)
                 if isinstance(response, dict) and response.get("error"):
-                    raise RuntimeError(
-                        f"policy server {response.get('error')}: {response.get('message', '')}"
-                    )
+                    raise PolicyRemoteError(response)
         except socket.timeout as exc:
             raise PolicyTimeoutError(f"policy inference exceeded {self.timeout_s * 1000:.0f} ms") from exc
         latency_ms = (time.perf_counter() - started) * 1000.0

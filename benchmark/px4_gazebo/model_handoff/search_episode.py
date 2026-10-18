@@ -9,14 +9,22 @@ class SearchEpisode:
     def __init__(self, bound_task, episode_id, motion_gate=None):
         if bound_task.definition.task != "search" or not isinstance(episode_id, str) or not episode_id:
             raise ValueError("Search task and opaque episode ID required")
-        if bound_task.definition.role_mode == "unassigned" and motion_gate is not None:
-            raise ValueError("Legacy fixed-role motion gate cannot score an unassigned-role task")
         self.evaluator = LanguageEvaluator(bound_task)
         self.episode_id = episode_id
         self.instruction = bound_task.definition.instruction
         self.previous = {agent: -1 for agent in AGENT_IDS}
         self.actions_requested = 0
         self.motion_gate = motion_gate
+
+    @property
+    def motion_gate(self):
+        return self._motion_gate
+
+    @motion_gate.setter
+    def motion_gate(self, gate):
+        if gate is not None and getattr(gate, "role_mode", "fixed") != self.evaluator.task.definition.role_mode:
+            raise ValueError("Motion gate role mode must match the task; legacy fixed-role motion gate cannot score unassigned roles")
+        self._motion_gate = gate
 
     def observation_error(self, reason):
         self.evaluator.invalidate("simulator_error", reason)
@@ -72,7 +80,7 @@ class SearchEpisode:
         result = {**self.evaluator.finish(), "actions_requested": self.actions_requested}
         if self.motion_gate is not None:
             from .search_motion_gate import MOTION_RULE_VERSION
-            result.update(motion_acceptance=MOTION_RULE_VERSION, motion_metrics=dict(self.motion_gate.metrics),
+            result.update(motion_acceptance=getattr(self.motion_gate, "rule_version", MOTION_RULE_VERSION), motion_metrics=dict(self.motion_gate.metrics),
                           motion_calibration={"private_local_goals": self.motion_gate.goals,
                                               "initial_xy": self.motion_gate.initial,
                                               "receiver_xy_at_found": self.motion_gate.receiver_start,

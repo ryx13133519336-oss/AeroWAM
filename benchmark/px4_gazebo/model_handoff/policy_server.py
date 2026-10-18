@@ -124,16 +124,24 @@ class _Handler(socketserver.BaseRequestHandler):
             response = self.server.policy(request)  # type: ignore[attr-defined]
         except Exception as exc:
             response = {"error": type(exc).__name__, "message": str(exc)}
+            from .search_reporter import SearchTravelBudgetExceeded
+            if isinstance(exc, SearchTravelBudgetExceeded):
+                response.update(failure_code=exc.code, diagnostics=exc.diagnostics)
         encoded = json.dumps(response, separators=(",", ":")).encode("utf-8")
         self.request.sendall(struct.pack("!I", len(encoded)) + encoded)
 
 
-def search_composite(policy, *, approach=False):
+def search_composite(policy, *, approach=False, role_mode="fixed"):
     """Keep checkpoint actions intact; select explicit auxiliary evidence."""
     from .grounded_interface import GroundedAdapter
     from .search_reporter import GroundedCheckpointPolicy, REPORTER_VERSION
+    if role_mode not in {"fixed", "unassigned"} or (role_mode == "unassigned" and not approach):
+        raise ValueError("Unassigned roles require the explicit approach composite")
     reporter, version = None, REPORTER_VERSION
-    if approach:
+    if role_mode == "unassigned":
+        from .role_free_search import RoleFreeApproachReporter, ROLE_FREE_REPORTER_VERSION
+        reporter, version = RoleFreeApproachReporter(), ROLE_FREE_REPORTER_VERSION
+    elif approach:
         from .search_approach_reporter import ApproachReporter, APPROACH_REPORTER_VERSION
         reporter, version = ApproachReporter(), APPROACH_REPORTER_VERSION
     return GroundedAdapter(GroundedCheckpointPolicy(policy, reporter=reporter)), version
@@ -145,16 +153,20 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--search-role-mode", choices=("fixed", "unassigned"), default="fixed")
     grounding = parser.add_mutually_exclusive_group()
     grounding.add_argument("--grounded-search-pilot", action="store_true",
                         help="Opt-in composite: learned actions + shared RGB color reporter for the two-target search pilot")
     grounding.add_argument("--grounded-search-approach", action="store_true",
                           help="Opt-in learned actions unchanged + public movement-evidence reporter, no navigation override")
     args = parser.parse_args()
+    if args.search_role_mode == "unassigned" and not args.grounded_search_approach:
+        parser.error("Unassigned roles require --grounded-search-approach")
     policy = InferencePolicy(args.checkpoint, device=args.device)
     method = policy.config.method
     if args.grounded_search_pilot or args.grounded_search_approach:
-        policy, version = search_composite(policy, approach=args.grounded_search_approach)
+        policy, version = search_composite(policy, approach=args.grounded_search_approach,
+                                         role_mode=args.search_role_mode)
         method += "+" + version
     with ReusableThreadingTCPServer((args.host, args.port), _Handler) as server:
         server.policy = policy  # type: ignore[attr-defined]

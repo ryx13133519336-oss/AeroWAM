@@ -23,6 +23,9 @@ def private_local_goals(tree, target_id, initial_yaws):
 
 
 class MotionSearchGate:
+    role_mode = "fixed"
+    rule_version = MOTION_RULE_VERSION
+
     def __init__(self, goals):
         self.goals = goals
         self.initial = None

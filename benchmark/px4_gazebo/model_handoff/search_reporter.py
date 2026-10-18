@@ -15,6 +15,23 @@ from .protocol import AGENT_IDS, ModelJointAction, WaypointDelta
 REPORTER_VERSION = "pilot_rgb_color_reporter/1"
 
 
+class SearchTravelBudgetExceeded(RuntimeError):
+    """Public movement guard, distinct from failed neural inference."""
+    code = "search_local_travel_budget_exceeded"
+
+    def __init__(self, distances):
+        super().__init__("RGB search local travel budget exceeded")
+        self.diagnostics = {"limit_m": 2.5, "displacement_m": distances,
+                            "exceeded_agents": [a for a in AGENT_IDS if distances[a] > 2.5]}
+
+
+def check_search_travel(observation, initial):
+    import math
+    distances = {a: math.dist(observation.states[a].position[:2], initial[a][:2]) for a in AGENT_IDS}
+    if any(distance > 2.5 for distance in distances.values()):
+        raise SearchTravelBudgetExceeded(distances)
+
+
 def requested_color(instruction):
     # Original text still reaches the learned action model unchanged. This
     # deliberately limited auxiliary parser cannot resolve negation, multiple

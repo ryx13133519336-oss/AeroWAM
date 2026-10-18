@@ -18,8 +18,11 @@ from .annotation_models import CAMERA_MODEL, LABEL_SENSOR, verify
 def run(output: Path, timeout_s: float = 40., scene_case: str = "partial", rig_models: Path | None = None) -> dict:
     if not 1 <= timeout_s <= 60:
         raise ValueError("timeout must be 1..60 seconds")
-    if scene_case not in {"partial", "clear", "full"}:
+    from .search_pilot_scene import OCCLUSION_CASES, static_occlusion_world
+    if scene_case not in {"partial", "clear", "full", *OCCLUSION_CASES}:
         raise ValueError("Unknown static scene case")
+    if scene_case in OCCLUSION_CASES and rig_models is None:
+        raise ValueError("Search occlusion diagnostic requires paired camera models")
     output.mkdir(parents=True, exist_ok=False)
     partition = "aerowam_annotation_" + uuid.uuid4().hex
     previous = os.environ.get("GZ_PARTITION")
@@ -46,7 +49,10 @@ def run(output: Path, timeout_s: float = 40., scene_case: str = "partial", rig_m
             wall.find("link/visual/geometry/box/size").text = "0.1 1.4 1.5"
         pairs = [{"agent_id": "uav_0", "rgb": "/aerowam/annotation_probe/rgb",
                   "segmentation": "/aerowam/annotation_probe/segmentation"}]
-        if rig_models is not None:
+        if scene_case in OCCLUSION_CASES:
+            summary["model_resources"] = verify(rig_models)
+            tree, pairs = static_occlusion_world(rig_models, scene_case)
+        elif rig_models is not None:
             summary["model_resources"] = verify(rig_models)
             scene = tree.getroot().find("world")
             scene.remove(scene.find("model[@name='probe_camera']"))

@@ -83,6 +83,9 @@ class LanguageEvaluator:
         self.last_time = -1
         self.closed = False
         self.stage_time = -1
+        # Private attribution of valid events, never an allocation sent to policy.
+        self.source_agent = task.definition.source_agent
+        self.receiver_agent = task.definition.receiver_agent
 
     def _fail(self, category, reason):
         # Missing/invalid evaluation evidence takes precedence over ability claims.
@@ -188,9 +191,13 @@ class LanguageEvaluator:
     def _event(self, report, frame, annotation, now):
         agent, event, t = report.agent_id, report.event, frame.sim_time_ns
         definition = self.task.definition
-        source, receiver = definition.source_agent, definition.receiver_agent
+        source, receiver = self.source_agent, self.receiver_agent
+        unassigned = definition.role_mode == "unassigned"
         if definition.task == "search":
-            if event == "found" and agent == source and not self.found:
+            if event == "found" and (source is None or agent == source) and not self.found:
+                if unassigned:
+                    self.source_agent = agent
+                    self.receiver_agent = next(a for a in AGENT_IDS if a != agent)
                 self.found = True
                 self.stage_time = now
             elif event == "confirm" and agent == receiver and self.found and t >= self.stage_time:
@@ -205,11 +212,15 @@ class LanguageEvaluator:
             if agent == receiver and self.accepted and t < self.stage_time:
                 self._fail("model_failure", "pre_accept_tracking_frame")
                 return
-            ready = self._dwell(agent, "track", t) if agent == source or self.accepted else False
+            ready = self._dwell(agent, "track", t) if (
+                agent == source or self.accepted or (unassigned and not self.requested)) else False
             if event == "handoff_request":
-                if agent != source or not ready or self.requested:
+                if (source is not None and agent != source) or not ready or self.requested:
                     self._fail("model_failure", "request_before_source_tracking")
                 else:
+                    if unassigned:
+                        self.source_agent = agent
+                        self.receiver_agent = next(a for a in AGENT_IDS if a != agent)
                     self.requested = True
                     self.stage_time = now
             elif event == "handoff_accept":
@@ -242,7 +253,8 @@ class LanguageEvaluator:
                 self.stage_time = now
         elif event == "confirm":
             covered = set.union(*self.views.values()) >= set(self.rules.inspection_views)
-            complementary = any(a != b for a in self.views[source] for b in self.views[receiver])
+            # Both agents must contribute; neither owns a prescribed view.
+            complementary = any(a != b for a in self.views[AGENT_IDS[0]] for b in self.views[AGENT_IDS[1]])
             if not covered or not complementary or t < self.stage_time:
                 self._fail("model_failure", "confirm_before_dual_view_inspection")
             else:
@@ -284,8 +296,12 @@ class LanguageEvaluator:
             category, reason = "success", "task_evidence_complete"
         else:
             category, reason = "model_failure", "incomplete_task_evidence"
-        return {"schema": EVALUATOR_SCHEMA, "task": self.task.definition.task,
+        result = {"schema": EVALUATOR_SCHEMA, "task": self.task.definition.task,
                 "category": category, "reason": reason,
                 "safety_violation": self.safety_reason,
                 "task_evidence_complete": self.completed,
                 "unique_report_frames": len(self.used)}
+        if self.task.definition.role_mode == "unassigned":
+            result.update(schema="aerowam-language-evaluation/2-draft", role_mode="unassigned",
+                          evidence_roles={"source": self.source_agent, "receiver": self.receiver_agent})
+        return result

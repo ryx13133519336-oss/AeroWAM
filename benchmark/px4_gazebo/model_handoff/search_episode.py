@@ -9,6 +9,8 @@ class SearchEpisode:
     def __init__(self, bound_task, episode_id, motion_gate=None):
         if bound_task.definition.task != "search" or not isinstance(episode_id, str) or not episode_id:
             raise ValueError("Search task and opaque episode ID required")
+        if bound_task.definition.role_mode == "unassigned" and motion_gate is not None:
+            raise ValueError("Legacy fixed-role motion gate cannot score an unassigned-role task")
         self.evaluator = LanguageEvaluator(bound_task)
         self.episode_id = episode_id
         self.instruction = bound_task.definition.instruction

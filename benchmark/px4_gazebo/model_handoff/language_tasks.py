@@ -10,6 +10,7 @@ from .fixtures import Appearance, COLORS, SHAPES, STRIPES
 from .protocol import AGENT_IDS, assert_truth_free
 
 TASK_SCHEMA = "aerowam-language-task/1-draft"
+ROLE_FREE_TASK_SCHEMA = "aerowam-language-task/2-draft"
 GROUNDING_SCHEMA = "aerowam-target-report/1-draft"
 TASKS = {"search", "handoff", "inspection"}
 REPORT_EVENTS = {"observe", "found", "handoff_request", "handoff_accept", "confirm", "inspect"}
@@ -74,8 +75,10 @@ class LanguageTask:
     instruction: str
     descriptor: Appearance
     rules: TaskRules = TaskRules()
-    source_agent: str = "uav_0"
-    receiver_agent: str = "uav_1"
+    source_agent: str | None = "uav_0"
+    receiver_agent: str | None = "uav_1"
+    # /1 defaults remain for legacy diagnostics, not the role-free benchmark.
+    role_mode: str = "fixed"
 
     def __post_init__(self):
         if self.task not in TASKS or not isinstance(self.instruction, str) or not self.instruction.strip():
@@ -85,14 +88,24 @@ class LanguageTask:
         if (self.descriptor.color not in COLORS or self.descriptor.shape not in SHAPES
                 or self.descriptor.stripe not in STRIPES):
             raise ValueError("Unsupported target appearance")
-        if self.source_agent not in AGENT_IDS or self.receiver_agent not in AGENT_IDS or self.source_agent == self.receiver_agent:
-            raise ValueError("Distinct valid task roles required")
+        if self.role_mode == "unassigned":
+            if self.source_agent is not None or self.receiver_agent is not None:
+                raise ValueError("Unassigned tasks cannot prescribe agent roles")
+        elif self.role_mode == "fixed":
+            if self.source_agent not in AGENT_IDS or self.receiver_agent not in AGENT_IDS or self.source_agent == self.receiver_agent:
+                raise ValueError("Distinct valid task roles required")
+        else:
+            raise ValueError("Unsupported task role mode")
 
     def public_context(self) -> dict:
         # Do not expose the structured descriptor or evaluator answer ID.
-        result = {"schema": TASK_SCHEMA, "task": self.task, "instruction": self.instruction,
-                  "roles": {"source": self.source_agent, "receiver": self.receiver_agent},
-                  "rules": asdict(self.rules)}
+        if self.role_mode == "unassigned":
+            result = {"schema": ROLE_FREE_TASK_SCHEMA, "task": self.task, "instruction": self.instruction,
+                      "role_mode": "unassigned", "rules": asdict(self.rules)}
+        else:
+            result = {"schema": TASK_SCHEMA, "task": self.task, "instruction": self.instruction,
+                      "roles": {"source": self.source_agent, "receiver": self.receiver_agent},
+                      "rules": asdict(self.rules)}
         assert_truth_free(result)
         return result
 
@@ -121,8 +134,28 @@ class BoundTask:
             raise ValueError("Invalid private target binding")
 
 
+def role_free_task(task: str, descriptor: Appearance, *, instruction: str | None = None,
+                   rules: TaskRules | None = None) -> LanguageTask:
+    """New task entry point: agent identities do not prescribe responsibilities.
+
+    Evidence may identify the source of one discovery/transfer, not a permanent
+    scout/receiver role. A custom instruction remains human-authored and must
+    be checked for consistency; this is not an arbitrary-language parser.
+    """
+    phrase = descriptor.phrase()
+    instructions = {
+        "search": f"Find the {phrase}. One UAV must report it; the other must independently confirm the same object.",
+        "handoff": f"Track the {phrase}. Transfer tracking to the other UAV, which must track and confirm the same object.",
+        "inspection": f"Both UAVs must inspect the {phrase} from complementary required views and confirm that object.",
+    }
+    if task not in instructions:
+        raise ValueError("Unsupported task")
+    return LanguageTask(task, instructions[task] if instruction is None else instruction, descriptor,
+                        rules or TaskRules(), None, None, "unassigned")
+
+
 def templated_task(task: str, descriptor: Appearance, *, rules: TaskRules | None = None) -> LanguageTask:
-    """Canonical authored instruction; paraphrases need a separate audit."""
+    """Legacy fixed-role diagnostic; new benchmark tasks use role_free_task."""
     phrase = descriptor.phrase()
     instructions = {
         "search": f"Find the {phrase}. UAV0 must report it; UAV1 must independently confirm the same object.",
@@ -134,7 +167,8 @@ def templated_task(task: str, descriptor: Appearance, *, rules: TaskRules | None
     return LanguageTask(task, instructions[task], descriptor, rules or TaskRules())
 
 
-def paired_target_tasks(task: str, objects: Mapping[str, Appearance], *, rules: TaskRules | None = None) -> tuple[BoundTask, ...]:
+def paired_target_tasks(task: str, objects: Mapping[str, Appearance], *, rules: TaskRules | None = None,
+                        role_mode: str = "fixed") -> tuple[BoundTask, ...]:
     """Same private scene, one changed instruction/answer per distinct object.
 
     These conditions are a scene-level paired group, not independent frames.
@@ -142,7 +176,10 @@ def paired_target_tasks(task: str, objects: Mapping[str, Appearance], *, rules: 
     """
     if len(objects) < 2:
         raise ValueError("A language-target pair requires at least two objects")
-    result = tuple(templated_task(task, appearance, rules=rules).bind(objects) for appearance in objects.values())
+    if role_mode not in {"fixed", "unassigned"}:
+        raise ValueError("Unsupported task role mode")
+    factory = role_free_task if role_mode == "unassigned" else templated_task
+    result = tuple(factory(task, appearance, rules=rules).bind(objects) for appearance in objects.values())
     if len({bound.target_id for bound in result}) != len(objects):
         raise ValueError("Target pairs must change the evaluator answer")
     return result

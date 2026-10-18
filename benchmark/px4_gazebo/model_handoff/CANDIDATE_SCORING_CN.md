@@ -95,3 +95,7 @@ python3 -B -m benchmark.px4_gazebo.model_handoff.candidate_scoring \
 失败原始文件保留，不产生候选分支标签、utility或真实预测成绩。
 当前单次搜索日志、静态遮挡图像和VLM动作菜单输出都不能替代这组分支。
 部分可观测、独立队友策略变化、组合留出及角色自由闭环仍未由本工具验证。
+
+后续只读时钟/内核探针仍拒绝当前空载环境：20秒RAW相对偏移幅度下界约552ms，
+同时记录到tick变化；没有借诊断输出将任何分支start_matched改为true，也未实现
+起点匹配比较器或新增真实候选标签。证据及限制见 [CLOCK_KERNEL_CN.md](CLOCK_KERNEL_CN.md)。

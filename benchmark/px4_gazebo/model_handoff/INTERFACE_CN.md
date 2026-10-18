@@ -62,6 +62,13 @@ python3 -B -u -m benchmark.px4_gazebo.model_handoff.adapter_server \
 批量配置目前仍只注册三个内置方法；外部 factory 服务入口不代表任意模型已适配，
 外部批处理注册、来源/权重哈希/训练预算记录仍在待办中，不能用内置方法名字冒充外部模型。
 
+2026-10-18新增统一适配层的离线登记清单与预检：`adapter_manifest`明确三类接口、
+RGB输入权限、方法自身角色属性、来源/原生输出/转换组件、训练声明及文件哈希，
+可另核验保存的公开请求/响应。它不导入factory、运行模型或确认清单完整性；
+预检通过不能替代400ms运行检查、真实预测评分或角色自由闭环。旧batch注册限制
+未改变。运行设施分层、清单字段、命令及后续接线要求见
+[ADAPTER_RUNTIME_CN.md](ADAPTER_RUNTIME_CN.md)。
+
 ## 候选条件预测与选择
 
 `decision_interface.py` 定义请求、响应、外部 `DecisionAdapter` 和 `DecisionClient`。

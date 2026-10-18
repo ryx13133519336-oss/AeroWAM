@@ -1,0 +1,9 @@
+import json
+from pathlib import Path
+import time
+
+root = Path('@@WSL_OUTPUT@@')
+with (root / 'ubuntu_ready.json').open('x') as f:
+    json.dump({'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+               'root_namespace': str(Path('/proc/self/ns/pid').resolve())}, f)
+time.sleep(650)

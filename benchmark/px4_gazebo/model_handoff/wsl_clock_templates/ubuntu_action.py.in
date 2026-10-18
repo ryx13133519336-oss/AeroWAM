@@ -1,0 +1,85 @@
+"""Temporary Ubuntu-side clock hold. Never sets the realtime epoch/status.
+
+Runs one frozen model SITL attempt as ryx after clearing residual slew.
+Only verified success can justify a subsequent model-load window.
+"""
+import ctypes
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+sys.path.insert(0, '@@WSL_REPO@@')
+from benchmark.px4_gazebo.model_handoff.clock_kernel_probe import KernelReader, _Timex, run
+from benchmark.px4_gazebo.model_handoff.clock_probe import environment
+
+ROOT = Path('@@WSL_OUTPUT@@')
+
+def save(name, data):
+    with (ROOT / name).open('x') as f:
+        json.dump(data, f, indent=2, allow_nan=False)
+
+def command(*args):
+    r = subprocess.run(args, capture_output=True, text=True, timeout=10)
+    if r.returncode:
+        raise RuntimeError(f'{args}: {r.stderr}')
+    return r.stdout
+
+def service():
+    return command('systemctl', 'show', 'systemd-timesyncd', '--property=ActiveState,SubState,UnitFileState')
+
+def main():
+    assert os.geteuid() == 0
+    assert (ROOT / 'root_hold_confirmed.json').is_file()
+    reader = KernelReader()
+    original = service()
+    assert 'ActiveState=active' in original and 'UnitFileState=enabled' in original
+    save('ubuntu_before.json', {'service': original, 'environment': environment(), 'kernel': reader(),
+         'settings_permanent': False, 'clock_epoch_or_status_set': False, 'flight': 'single_SITL_attempt_only'})
+    result = None
+    error = None
+    adjustments = []
+    model_result = None
+    model_returncode = None
+    try:
+        command('systemctl', 'stop', 'systemd-timesyncd')
+        query = reader.library.adjtimex
+        def adjust(modes, **fields):
+            assert modes in (0x8001, 0x0001, 0x4002)
+            value = _Timex()
+            value.modes = modes
+            for key, v in fields.items():
+                setattr(value, key, v)
+            status = query(ctypes.byref(value))
+            if status < 0:
+                raise OSError(ctypes.get_errno(), 'Scoped correction clear failed')
+            adjustments.append({'modes': modes, 'requested': fields, 'readback': reader()})
+        # Clear residual phase/single-shot corrections and the interrupted
+        # daemon's large slew. No UTC epoch step, no STA status assignment.
+        adjust(0x8001, offset=0)
+        adjust(0x0001, offset=0)
+        assert os.sysconf('SC_CLK_TCK') == 100
+        adjust(0x4002, freq=0, tick=10000)
+        save('adjustments.json', adjustments)
+        after = reader()
+        assert after['offset'] == 0 and after['frequency_scaled_ppm'] == 0 and after['tick_us'] == 10000
+        launch = 'source /opt/ros/humble/setup.bash && source /home/ryx/px4_ros2_ws/install/local_setup.bash && exec /usr/bin/python3 -B -u @@WSL_OUTPUT@@/run.py'
+        execution = subprocess.run(['runuser', '-u', 'ryx', '--', '/bin/bash', '-c', launch], timeout=520)
+        model_returncode = execution.returncode
+        model_result = json.loads((ROOT / 'result.json').read_text())
+        result = model_result.get('whole_session_quality', model_result.get('preflight'))
+        print(json.dumps({'phase': 'isolated_model_session', 'summary': result}), flush=True)
+    except BaseException as exc:
+        error = f'{type(exc).__name__}:{exc}'
+    finally:
+        # Resume normal daemons; do not replay obsolete offset/frequency.
+        command('systemctl', 'start', 'systemd-timesyncd')
+        save('ubuntu_result.json', {'error': error, 'summary': result, 'service_after': service(),
+             'environment_after': environment(), 'kernel_after': reader(), 'flight': 'single_SITL_attempt_only',
+             'permanent_config_change': False, 'model_returncode': model_returncode, 'model_result_file': 'result.json'})
+    if error or not result or not result['quality_passed']:
+        raise SystemExit(2)
+
+if __name__ == '__main__':
+    main()

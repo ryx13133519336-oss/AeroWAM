@@ -1,0 +1,145 @@
+"""One frozen unassigned pilot, gated read-only inside external scoped clock hold."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, '@@WSL_REPO@@')
+from benchmark.px4_gazebo.model_handoff.clock_kernel_probe import run as preflight_probe, service_context
+from benchmark.px4_gazebo.model_handoff.clock_probe import environment
+from benchmark.px4_gazebo.model_handoff.startup_clock import StartupClockMonitor, session_quality
+
+ROOT = Path('@@WSL_OUTPUT@@')
+CHECKPOINT = Path('@@WSL_DATA@@/checkpoints/joint_bc_confirm_fix_v1_seed_0.pt')
+EXPECTED = 'd65ba56323d2a1e426e2c810bbaccf5e33f9a0a7c36201b1d37b87ab197f93af'
+COMMAND = ['/usr/bin/python3', '-B', '-u', '-m', 'benchmark.px4_gazebo.model_handoff.search_pilot',
+    '--px4-root', '/home/ryx/PX4-Autopilot', '--models', '@@WSL_DATA@@/annotation_models_v1',
+    '--agent', '@@WSL_DATA@@/tools/microxrce_agent_v242_humble/MicroXRCEAgent',
+    '--policy', 'checkpoint_search', '--method', 'joint_bc', '--checkpoint', str(CHECKPOINT),
+    '--policy-python', '/home/ryx/venvs/aerowam-model/bin/python3', '--device', 'cuda',
+    '--role-mode', 'unassigned', '--execute-flight', '--duration', '90', '--startup-timeout', '150',
+    '--instruction', '找到蓝色方块，并让另一架无人机确认', '--expected-target', 'blue',
+    '--output-dir', str(ROOT / 'pilot')]
+
+def save(name, obj):
+    with (ROOT / name).open('x', encoding='utf-8') as stream:
+        json.dump(obj, stream, ensure_ascii=False, indent=2, allow_nan=False)
+
+def owned_tree(parent):
+    table = {}
+    for p in Path('/proc').glob('[0-9]*/stat'):
+        try:
+            f = p.read_text().rsplit(')', 1)[1].split()
+            table[int(p.parent.name)] = (int(f[1]), f[19])
+        except (OSError, ValueError, IndexError):
+            pass
+    found = {parent}
+    while True:
+        new = {pid for pid, (ppid, _) in table.items() if ppid in found}
+        if new <= found:
+            return {pid: table[pid][1] for pid in found if pid in table}
+        found |= new
+
+def alive(owned):
+    result = {}
+    for pid, start in owned.items():
+        try:
+            f = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+            if f[19] == start and f[0] != 'Z':
+                result[pid] = start
+        except (OSError, IndexError):
+            pass
+    return result
+
+def main():
+    assert os.geteuid() != 0, 'Model and PX4 must run as normal user'
+    import rclpy
+    import px4_msgs
+    import gz.transport13
+    save('runtime_environment.json', {'rclpy': rclpy.__file__, 'px4_msgs': px4_msgs.__file__, 'ROS_DISTRO': os.environ.get('ROS_DISTRO'), 'uid': os.geteuid()})
+    occupied = subprocess.run(['pgrep', '-af', '[s]earch_pilot|[g]z sim|[/]bin/px4|[M]icroXRCEAgent|[s]trace.*-p'],
+                              capture_output=True, text=True, timeout=5.)
+    if occupied.returncode != 1:
+        raise RuntimeError(f'Existing simulation/tracing or check failed: {occupied.stdout}')
+    assert hashlib.sha256(CHECKPOINT.read_bytes()).hexdigest() == EXPECTED
+    before = environment()
+    save('protocol.json', {'single_attempt': True, 'command': COMMAND, 'clock_limit_ms': 10,
+         'inference_budget_ms': 400, 'service_before': service_context(), 'environment': before,
+         'clock_or_service_mutations_by_model_supervisor': False, 'external_clock_isolation': True, 'checkpoint_sha256': EXPECTED,
+         'scope': 'unassigned_frozen_model_single_execution_diagnostic_not_transfer_score'})
+    preflight = preflight_probe(ROOT / 'preflight.json', duration_s=20., interval_ms=50.)
+    print(json.dumps({'phase': 'preflight', 'summary': preflight}), flush=True)
+    if not preflight['quality_passed']:
+        save('result.json', {'stop_reason': 'original_preflight_gate_rejected_no_model_no_flight',
+             'preflight': preflight, 'model_runner_started': False, 'flight_executed': False,
+             'role_free_transfer_score': None, 'clock_or_service_mutations_by_model_supervisor': False, 'external_clock_isolation': True,
+             'checkpoint_unchanged': hashlib.sha256(CHECKPOINT.read_bytes()).hexdigest() == EXPECTED,
+             'service_after': service_context(), 'environment_after': environment()})
+        raise SystemExit(2)
+    monitor = StartupClockMonitor(ROOT / 'pilot_host_clocks.json')
+    monitor.start()
+    process = None
+    owned, errors = {}, []
+    reason, live_rejection = 'runner_not_started', None
+    started = time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
+    try:
+        env = dict(os.environ, HF_HOME='@@WSL_DATA@@/cache/huggingface', HF_HUB_OFFLINE='1')
+        with (ROOT / 'runner.log').open('xb') as log:
+            process = subprocess.Popen(COMMAND, cwd='@@WSL_REPO@@', env=env, stdin=subprocess.DEVNULL,
+                                       stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            reason = 'runner_exited'
+            print(json.dumps({'phase': 'single_jointbc_runner_started', 'pid': process.pid}), flush=True)
+            while process.poll() is None:
+                owned.update(owned_tree(process.pid))
+                monitor.check()
+                with monitor._lock:
+                    samples, sample_errors = list(monitor.samples), list(monitor.errors)
+                quality = session_quality(samples, monitor._before, environment(), sample_errors) if len(samples) >= 2 else None
+                elapsed = (time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW) - started) / 1e9
+                if (quality and not quality['quality_passed']) or elapsed > 420:
+                    reason = 'whole_session_clock_gate_failed' if quality and not quality['quality_passed'] else 'raw_supervisor_deadline'
+                    live_rejection = quality
+                    os.kill(process.pid, signal.SIGINT)
+                    # The runner's ordinary landing deadline is 52s; do not cut
+                    # it short with the old 30s supervisor grace period.
+                    try:
+                        process.wait(timeout=65.)
+                    except subprocess.TimeoutExpired:
+                        errors.append('Runner exceeded ordinary landing and cleanup grace')
+                    break
+                time.sleep(.5)
+    except BaseException as exc:
+        reason = 'supervisor_exception'
+        errors.append(f'{type(exc).__name__}:{exc}')
+    finally:
+        if process is not None:
+            owned.update(owned_tree(process.pid))
+            for sig, wait_s in ((signal.SIGINT, 5.), (signal.SIGTERM, 3.), (signal.SIGKILL, 1.)):
+                survivors = alive(owned)
+                if not survivors:
+                    break
+                for pid in survivors:
+                    try:
+                        os.kill(pid, sig)
+                    except ProcessLookupError:
+                        pass
+                time.sleep(wait_s)
+            if process.poll() is None:
+                process.wait(timeout=2.)
+        quality = monitor.finish()
+        save('result.json', {'stop_reason': reason, 'live_rejection_before_cleanup': live_rejection,
+             'whole_session_quality': quality, 'preflight': preflight, 'model_runner_started': process is not None,
+             'runner_returncode': process.returncode if process else None, 'supervisor_errors': errors,
+             'remaining_owned_processes': alive(owned), 'role_free_transfer_score': None,
+             'clock_or_service_mutations_by_model_supervisor': False, 'external_clock_isolation': True, 'service_after': service_context(), 'environment_after': environment(),
+             'checkpoint_unchanged': hashlib.sha256(CHECKPOINT.read_bytes()).hexdigest() == EXPECTED})
+        print(json.dumps({'phase': 'finished', 'reason': reason, 'clock_quality_passed': quality['quality_passed']}), flush=True)
+    if reason != 'runner_exited' or errors or process.returncode != 0 or not quality['quality_passed'] or alive(owned):
+        raise SystemExit(2)
+
+if __name__ == '__main__':
+    main()

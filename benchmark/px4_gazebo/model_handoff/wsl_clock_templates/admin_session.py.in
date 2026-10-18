@@ -1,0 +1,182 @@
+"""Authorized bounded VM clock hold; signals only verified VM chronyd.
+
+The Ubuntu side supplies a finite, separately auditable probe/model action.
+Chronyd is CONT-resumed by trap and independent PID/starttime watchdog.
+"""
+import ctypes
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import time
+
+ROOT = Path('@@WINDOWS_OUTPUT@@')
+WSL = str(Path(os.environ['SystemRoot']) / 'System32/wsl.exe')
+COMMANDS = r'''
+run_aerowam_clock_session() {
+  printf '__ROOT_BEGIN__\n'
+  cat /proc/sys/kernel/random/boot_id
+  test "$(cat /proc/1/comm)" = mini_init || return 20
+  test "$(cat /proc/2/comm)" = kthreadd || return 21
+  printf '__ROOT_PROCESSES__\n'
+  ps -e -o pid,ppid,comm,args
+  chronyc -n tracking
+  chronyc -n sources -v
+  ubuntu=''
+  for d in /proc/[0-9]*; do
+    if test -x "$d/root/usr/bin/strace" && test -f "$d/root@@WSL_OUTPUT@@/ubuntu_ready.json"; then
+      ubuntu="$d/root"
+      break
+    fi
+  done
+  test -n "$ubuntu" || { printf '__NO_UBUNTU_ROOT__\n'; return 22; }
+  cat "$ubuntu@@WSL_OUTPUT@@/ubuntu_ready.json"
+  target=''
+  for d in /proc/[0-9]*; do
+    executable=$(readlink "$d/exe" 2>/dev/null)
+    if test "$executable" = /sbin/chronyd || test "$executable" = /usr/sbin/chronyd; then
+      test "$(awk '{print $4}' "$d/stat")" = 1 || continue
+      test -z "$target" || { printf '__MULTIPLE_CHRONYD__\n'; return 23; }
+      target=${d##*/}
+    fi
+  done
+  test -n "$target" || { printf '__NO_TARGET__\n'; return 24; }
+  target_exe=$(readlink "/proc/$target/exe")
+  printf 'TARGET_PID=%s\n' "$target"
+  readlink "/proc/$target/exe"
+  printf '__TRACE_BEGIN__\n'
+  printf '__TRACE_END__\n'
+  grep -E 'Name:|Pid:|TracerPid:' "/proc/$target/status"
+  start=$(awk '{print $22}' "/proc/$target/stat")
+  resume_aerowam_clock() {
+    if test "$(readlink /proc/$target/exe 2>/dev/null)" = "$target_exe" && test "$(awk '{print $22}' /proc/$target/stat 2>/dev/null)" = "$start"; then
+      kill -CONT "$target"
+      printf '__ROOT_RESUMED__\n'
+    fi
+  }
+  trap resume_aerowam_clock EXIT HUP INT TERM
+  ( sleep 600; if test "$(readlink /proc/$target/exe 2>/dev/null)" = "$target_exe" && test "$(awk '{print $22}' /proc/$target/stat 2>/dev/null)" = "$start"; then kill -CONT "$target"; fi ) &
+  guardian=$!
+  kill -STOP "$target" || return 25
+  grep -q '^State:.*T' "/proc/$target/status" || return 26
+  grep -E 'Name:|State:|Pid:|TracerPid:' "/proc/$target/status"
+  printf '__ROOT_HELD__\n'
+  hold_seconds=0
+  while ! test -f "$ubuntu@@WSL_OUTPUT@@/root_release.json"; do
+    test "$hold_seconds" -lt 570 || break
+    sleep 1
+    hold_seconds=$((hold_seconds + 1))
+  done
+  resume_aerowam_clock
+  trap - EXIT HUP INT TERM
+  kill "$guardian" 2>/dev/null
+  wait "$guardian" 2>/dev/null
+  chronyc -n tracking
+  printf '__ROOT_DONE__\n'
+}
+run_aerowam_clock_session
+'''
+
+def save(name, payload):
+    with (ROOT / name).open('x', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+def main():
+    assert ctypes.windll.shell32.IsUserAnAdmin()
+    jobs, handles = [], []
+    failure = None
+    held = resumed = done = False
+    started = time.monotonic()
+    save('admin_before.json', {'pid': os.getpid(), 'administrator': True,
+         'bounded_seconds': 660, 'root_watchdog_seconds': 600,
+         'root_mutation': 'SIGSTOP/CONT of verified chronyd PID and starttime only',
+         'windows_service_changes': False, 'packages_installed': False})
+    def launch(name, args, stdin=subprocess.DEVNULL):
+        out = (ROOT / (name + '_stdout.log')).open('xb', buffering=0)
+        err = (ROOT / (name + '_stderr.log')).open('xb', buffering=0)
+        handles.extend((out, err))
+        child = subprocess.Popen(args, stdin=stdin, stdout=out, stderr=err,
+            text=True, encoding='utf-8', creationflags=subprocess.CREATE_NO_WINDOW)
+        jobs.append((name, child))
+        return child
+    def output():
+        raw = (ROOT / 'vm_stdout.log').read_bytes().decode('utf-8', errors='replace')
+        return re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', raw).replace('\x00', '').replace('\r', '')
+    def marker(name):
+        return bool(re.search(r'(?m)^\r*' + re.escape(name) + r'\r?$', output()))
+    vm = action = None
+    try:
+        # A real running Ubuntu process and ready artifact must exist BEFORE
+        # entering the VM initial PID namespace; no startup timing guess.
+        keepalive = launch('keepalive', [WSL, '-d', 'Ubuntu-22.04', '-u', 'ryx', '-e',
+            '/usr/bin/python3', '-B', '-u', '@@WSL_OUTPUT@@/ubuntu_ready.py'])
+        deadline = time.monotonic() + 35
+        while not (ROOT / 'ubuntu_ready.json').exists():
+            if keepalive.poll() is not None or time.monotonic() > deadline:
+                raise RuntimeError('Ubuntu readiness failed')
+            time.sleep(.2)
+        vm = launch('vm', [WSL, '--debug-shell'], stdin=subprocess.PIPE)
+        vm.stdin.write(COMMANDS)
+        vm.stdin.flush()
+        deadline = time.monotonic() + 65
+        while not marker('__ROOT_HELD__'):
+            if marker('__NO_UBUNTU_ROOT__') or marker('__MULTIPLE_CHRONYD__') or marker('__NO_TARGET__') or vm.poll() is not None or time.monotonic() > deadline:
+                raise RuntimeError('VM scope/hold not confirmed; no Ubuntu changes')
+            time.sleep(.25)
+        if marker('__ROOT_RESUMED__') or marker('__ROOT_DONE__'):
+            raise RuntimeError('Root hold ended before Ubuntu action')
+        held = True
+        save('root_hold_confirmed.json', {'root_log': 'vm_stdout.log', 'elapsed_s': time.monotonic() - started})
+        action = launch('action', [WSL, '-d', 'Ubuntu-22.04', '-u', 'root', '-e', '/usr/bin/python3', '-B', '-u',
+            '@@WSL_OUTPUT@@/ubuntu_action.py'])
+        while action.poll() is None and time.monotonic() - started < 555:
+            time.sleep(.5)
+        if marker('__ROOT_RESUMED__') or marker('__ROOT_DONE__'):
+            raise RuntimeError('Root hold ended during Ubuntu action; evidence rejected')
+        if action.poll() is None:
+            raise RuntimeError('Ubuntu action exceeded bounded session')
+    except BaseException as exc:
+        failure = f'{type(exc).__name__}:{exc}'
+    finally:
+        if vm is not None and vm.poll() is None:
+            try:
+                save('root_release.json', {'reason': 'Ubuntu action finished or supervisor cleanup'})
+                vm.stdin.flush()
+                deadline = time.monotonic() + 12
+                while time.monotonic() < deadline:
+                    resumed = marker('__ROOT_RESUMED__')
+                    done = marker('__ROOT_DONE__')
+                    if done or not held:
+                        break
+                    time.sleep(.2)
+                vm.stdin.write('exit\n')
+                vm.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass
+        # Restore Ubuntu even if its action wrapper failed, before closing
+        # only our own WSL clients. Original service is active/enabled.
+        restore_returncode, restore_error = 0, ''
+        restore_attempted = (ROOT / 'ubuntu_before.json').exists()
+        if restore_attempted:
+            restore = subprocess.run([WSL, '-d', 'Ubuntu-22.04', '-u', 'root', '-e',
+                '/bin/systemctl', 'start', 'systemd-timesyncd'], capture_output=True, text=True,
+                timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
+            restore_returncode, restore_error = restore.returncode, restore.stderr
+        results = []
+        for name, child in jobs:
+            closed = child.poll() is None
+            if closed:
+                child.terminate()
+                child.wait(timeout=5)
+            results.append({'name': name, 'pid': child.pid, 'returncode': child.returncode, 'client_closed': closed})
+        for f in handles:
+            f.close()
+        save('admin_result.json', {'failure': failure, 'elapsed_s': time.monotonic() - started,
+             'root_held': held, 'root_resumed_confirmed': resumed, 'root_done': done,
+             'ubuntu_restore_returncode': restore_returncode, 'ubuntu_restore_error': restore_error,
+             'ubuntu_restore_attempted': restore_attempted,
+             'jobs': results, 'windows_service_changes': False})
+
+if __name__ == '__main__':
+    main()

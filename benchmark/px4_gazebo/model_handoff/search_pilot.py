@@ -37,6 +37,7 @@ from .search_reporter import REPORTER_VERSION, RGBScanPolicy, requested_color
 from .search_motion_policy import MOTION_POLICY_VERSION, RGBSearchPolicy
 from .search_motion_gate import MOTION_RULE_VERSION, MotionSearchGate, private_local_goals
 from .search_approach_reporter import APPROACH_REPORTER_VERSION
+from .startup_evidence import StartupEvidence, validate_mode as validate_startup_evidence_mode
 from .teammate_response import (RESPONSE_PROFILES, ResponseSpec, TeammateResponse,
                                 audit_response_trace, request_control)
 
@@ -86,10 +87,15 @@ def inspect_agent(path):
 
 
 def run_condition(args, bound, output):
+    validate_startup_evidence_mode(getattr(args, "startup_evidence_frames", 0),
+                                  execute_flight=args.execute_flight, control_link_check=args.control_link_check,
+                                  policy=args.policy, teammate_response=args.teammate_response)
     import rclpy
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from px4_msgs.msg import VehicleOdometry, VehicleStatus, VehicleCommand, VehicleCommandAck
+    from rclpy.serialization import serialize_message
+    from .clock_probe import sample_clocks
     from gz.transport13 import Node
     from gz.msgs10.image_pb2 import Image
     from gz.msgs10.clock_pb2 import Clock
@@ -275,9 +281,10 @@ def run_condition(args, bound, output):
             for key, msg_type, suffix in (("status", VehicleStatus, "vehicle_status_v4"),
                                           ("odometry", VehicleOdometry, "vehicle_odometry")):
                 def receive(msg, k=key, i=index):
-                    (status if k == "status" else odometry)[i] = msg
-                    received[k, i] = time.monotonic()
-                    counts[k, i] = counts.get((k, i), 0) + 1
+                    with lock:
+                        (status if k == "status" else odometry)[i] = msg
+                        received[k, i] = time.monotonic()
+                        counts[k, i] = counts.get((k, i), 0) + 1
                 ros.create_subscription(msg_type, f"/annotation_smoke_{index}/fmu/out/{suffix}", receive, qos)
             def receive_ack(msg, i=index):
                 command_acks.append({"agent": f"uav_{i}", "command": int(msg.command), "result": int(msg.result),
@@ -305,7 +312,8 @@ def run_condition(args, bound, output):
                     raise RuntimeError(f"Subscription failed: {topic}")
                 subscriptions.append(topic)
         def receive_clock(message):
-            clock.update(stamp=message.sim.sec * 1_000_000_000 + message.sim.nsec, received=time.monotonic())
+            with lock:
+                clock.update(stamp=message.sim.sec * 1_000_000_000 + message.sim.nsec, received=time.monotonic())
         clock_topic = f"/world/{WORLD}/clock"
         if not transport.subscribe(Clock, clock_topic, receive_clock):
             raise RuntimeError("Cannot subscribe simulation clock")
@@ -372,6 +380,34 @@ def run_condition(args, bound, output):
             raise TimeoutError("Isolated startup streams not ready")
         summary["startup_passed"] = True
         summary["startup_wait_s"] = time.monotonic() - startup_started
+        if getattr(args, "startup_evidence_frames", 0):
+            # No PX4ControlLink or SearchFlightControl exists in this mode.
+            evidence = StartupEvidence(private / "startup_evidence", args.startup_evidence_frames,
+                                       summary["scene_sha256"])
+            evidence_deadline, after = time.monotonic() + 15., -250_000_000
+            while len(evidence.rows) < args.startup_evidence_frames:
+                check_processes()
+                if time.monotonic() >= evidence_deadline:
+                    raise TimeoutError("Disarmed evidence collection incomplete")
+                with lock:
+                    common = None
+                    for pair in pairs:
+                        stamps = set(frames.get(pair["rgb"], {})) & set(frames.get(pair["labels"], {}))
+                        common = stamps if common is None else common & stamps
+                    advancing = [s for s in common or () if s - after >= 250_000_000]
+                    if advancing:
+                        stamp = max(advancing)
+                        cameras = {p["agent"]: {"stamp_ns": stamp, "rgb": frames[p["rgb"]][stamp],
+                                               "labels": frames[p["labels"]][stamp]} for p in pairs}
+                        frozen = dict(odometry=odometry.copy(), status=status.copy(), received=received.copy(),
+                                      clock=clock.copy(), cameras=cameras, now=time.monotonic())
+                    else:
+                        frozen = None
+                if frozen is not None:
+                    evidence.add(**frozen, serialize_ros=serialize_message, host_clock=sample_clocks())
+                    after = stamp
+                time.sleep(.02)
+            summary["startup_evidence"] = evidence.finish()
         if control_link is not None:
             control_link.start()
             last_gate_log = -math.inf
@@ -585,6 +621,8 @@ def main():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--execute-flight", action="store_true", help="Actually arm/take off isolated SITL instances20/21; no hardware")
     parser.add_argument("--control-link-check", action="store_true", help="Verify disarm-command ACK while already disarmed; never take off")
+    parser.add_argument("--startup-evidence-frames", type=int, default=0,
+                        help="Private disarmed raw capture: 0 disabled or 2..20 frames; no flight/command check/checkpoint")
     parser.add_argument("--gui", action="store_true", help="Open GUI in the same isolated partition; close with the session")
     parser.add_argument("--duration", type=float, default=None,
                         help="Wall-clock RUN budget, never auto-extended: rgb_search/checkpoint_search default90/range5..120; other modes default30/range5..60")
@@ -606,6 +644,12 @@ def main():
         parser.error("Run in WSL/Linux with ROS and Gazebo Python bindings")
     if args.execute_flight and args.control_link_check:
         parser.error("--control-link-check cannot be combined with --execute-flight")
+    try:
+        validate_startup_evidence_mode(args.startup_evidence_frames, execute_flight=args.execute_flight,
+                                      control_link_check=args.control_link_check, policy=args.policy,
+                                      teammate_response=args.teammate_response)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.teammate_response != "nominal" and args.policy not in MOTION_POLICIES:
         parser.error("Non-nominal teammate response requires rgb_search or checkpoint_search; legacy modes unchanged")
     try:

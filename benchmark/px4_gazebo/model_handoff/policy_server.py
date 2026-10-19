@@ -24,9 +24,18 @@ def _receive_exact(connection: Any, size: int) -> bytes:
     return bytes(value)
 
 
+def validate_policy_seed(seed):
+    if seed is not None and (type(seed) is not int or not 0 <= seed < 2**32):
+        raise ValueError("Policy seed must be an integer in 0..2**32-1")
+    return seed
+
+
 class InferencePolicy:
-    def __init__(self, checkpoint: Path, *, device: str) -> None:
+    def __init__(self, checkpoint: Path, *, device: str, seed=None) -> None:
+        validate_policy_seed(seed)
         import torch
+        if seed is not None:
+            torch.manual_seed(seed)
         from .models import ModelConfig, build_model
         payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
         self.config = ModelConfig(**payload["model_config"])
@@ -153,6 +162,7 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--seed", type=int, help="Optional torch/planner seed; does not alter checkpoint weights")
     parser.add_argument("--search-role-mode", choices=("fixed", "unassigned"), default="fixed")
     grounding = parser.add_mutually_exclusive_group()
     grounding.add_argument("--grounded-search-pilot", action="store_true",
@@ -162,7 +172,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.search_role_mode == "unassigned" and not args.grounded_search_approach:
         parser.error("Unassigned roles require --grounded-search-approach")
-    policy = InferencePolicy(args.checkpoint, device=args.device)
+    validate_policy_seed(args.seed)
+    policy = InferencePolicy(args.checkpoint, device=args.device, seed=args.seed)
     method = policy.config.method
     if args.grounded_search_pilot or args.grounded_search_approach:
         policy, version = search_composite(policy, approach=args.grounded_search_approach,

@@ -14,12 +14,13 @@ from benchmark.px4_gazebo.model_handoff.clock_probe import environment
 from benchmark.px4_gazebo.model_handoff.startup_clock import StartupClockMonitor, session_quality
 
 ROOT = Path('@@WSL_OUTPUT@@')
-CHECKPOINT = Path('@@WSL_DATA@@/checkpoints/joint_bc_confirm_fix_v1_seed_0.pt')
-EXPECTED = 'd65ba56323d2a1e426e2c810bbaccf5e33f9a0a7c36201b1d37b87ab197f93af'
+CHECKPOINT = Path('@@WSL_DATA@@/checkpoints/@@CHECKPOINT_FILE@@')
+EXPECTED = '@@CHECKPOINT_SHA256@@'
 COMMAND = ['/usr/bin/python3', '-B', '-u', '-m', 'benchmark.px4_gazebo.model_handoff.search_pilot',
     '--px4-root', '/home/ryx/PX4-Autopilot', '--models', '@@WSL_DATA@@/annotation_models_v1',
     '--agent', '@@WSL_DATA@@/tools/microxrce_agent_v242_humble/MicroXRCEAgent',
-    '--policy', 'checkpoint_search', '--method', 'joint_bc', '--checkpoint', str(CHECKPOINT),
+    '--policy', 'checkpoint_search', '--method', '@@METHOD@@', '--checkpoint', str(CHECKPOINT),
+    '--policy-seed', '@@POLICY_SEED@@',
     '--policy-python', '/home/ryx/venvs/aerowam-model/bin/python3', '--device', 'cuda',
     '--role-mode', 'unassigned', '--execute-flight', '--duration', '90', '--startup-timeout', '150',
     '--instruction', '找到蓝色方块，并让另一架无人机确认', '--expected-target', 'blue',
@@ -68,7 +69,7 @@ def main():
     assert hashlib.sha256(CHECKPOINT.read_bytes()).hexdigest() == EXPECTED
     before = environment()
     save('protocol.json', {'single_attempt': True, 'command': COMMAND, 'clock_limit_ms': 10,
-         'inference_budget_ms': 400, 'service_before': service_context(), 'environment': before,
+         'inference_budget_ms': 400, 'policy_seed': @@POLICY_SEED@@, 'service_before': service_context(), 'environment': before,
          'clock_or_service_mutations_by_model_supervisor': False, 'external_clock_isolation': True, 'checkpoint_sha256': EXPECTED,
          'scope': 'unassigned_frozen_model_single_execution_diagnostic_not_transfer_score'})
     preflight = preflight_probe(ROOT / 'preflight.json', duration_s=20., interval_ms=50.)
@@ -92,7 +93,7 @@ def main():
             process = subprocess.Popen(COMMAND, cwd='@@WSL_REPO@@', env=env, stdin=subprocess.DEVNULL,
                                        stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             reason = 'runner_exited'
-            print(json.dumps({'phase': 'single_jointbc_runner_started', 'pid': process.pid}), flush=True)
+            print(json.dumps({'phase': 'single_@@METHOD@@_runner_started', 'pid': process.pid}), flush=True)
             while process.poll() is None:
                 owned.update(owned_tree(process.pid))
                 monitor.check()

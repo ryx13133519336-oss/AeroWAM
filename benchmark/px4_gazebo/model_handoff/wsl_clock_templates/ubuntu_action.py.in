@@ -13,6 +13,7 @@ import sys
 sys.path.insert(0, '@@WSL_REPO@@')
 from benchmark.px4_gazebo.model_handoff.clock_kernel_probe import KernelReader, _Timex, run
 from benchmark.px4_gazebo.model_handoff.clock_probe import environment
+from benchmark.px4_gazebo.model_handoff.wsl_clock_session import require_cleared_clock
 
 ROOT = Path('@@WSL_OUTPUT@@')
 
@@ -63,7 +64,7 @@ def main():
         adjust(0x4002, freq=0, tick=10000)
         save('adjustments.json', adjustments)
         after = reader()
-        assert after['offset'] == 0 and after['frequency_scaled_ppm'] == 0 and after['tick_us'] == 10000
+        require_cleared_clock(after)
         launch = 'source /opt/ros/humble/setup.bash && source /home/ryx/px4_ros2_ws/install/local_setup.bash && exec /usr/bin/python3 -B -u @@WSL_OUTPUT@@/run.py'
         execution = subprocess.run(['runuser', '-u', 'ryx', '--', '/bin/bash', '-c', launch], timeout=520)
         model_returncode = execution.returncode

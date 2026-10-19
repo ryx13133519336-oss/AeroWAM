@@ -28,6 +28,7 @@ from .gazebo_rasters import GZ8_INSTANCE_ENCODING, pair_rgb_instance, resize_pai
 from .images import ros_image_to_jpeg
 from .pixel_annotations import CaptureKey, annotate
 from .policy_client import PolicyClient, PolicyRemoteError, PolicyTimeoutError
+from .policy_server import validate_policy_seed
 from .protocol import AGENT_IDS, ModelObservation
 from .search_episode import SearchEpisode
 from .search_flight_control import SearchFlightControl, px4_topic
@@ -144,6 +145,7 @@ def inspect_agent(path):
 
 
 def run_condition(args, bound, output):
+    policy_seed = validate_policy_seed(getattr(args, "policy_seed", None))
     role_mode = getattr(args, "role_mode", "fixed")
     validate_search_role_mode(role_mode, args.policy, args.teammate_response)
     if bound.definition.role_mode != role_mode:
@@ -188,6 +190,7 @@ def run_condition(args, bound, output):
                                                  MOTION_POLICY_VERSION if args.policy == "rgb_search" else "rgb_scan_positive_control"),
                "reporter": reporter_version, "execute_flight": args.execute_flight,
                "role_mode": role_mode, "learned_role_adaptation_verified": False,
+               "policy_seed": policy_seed,
                "capture_aligned_telemetry": False, "communication": "centralized_unrestricted_diagnostic",
                "compositional_evaluation": False, "training_dataset_created": False,
                "live_multitask_ready": False, "initial_target_visible": None}
@@ -318,7 +321,8 @@ def run_condition(args, bound, output):
             spawn("policy", [str(args.policy_python), "-B", "-u", "-m", "benchmark.px4_gazebo.model_handoff.policy_server",
                              "--checkpoint", str(args.checkpoint), "--device", args.device,
                              "--port", str(policy_port), "--search-role-mode", role_mode,
-                             "--grounded-search-approach" if args.policy == "checkpoint_search" else "--grounded-search-pilot"], env, Path.cwd())
+                             "--grounded-search-approach" if args.policy == "checkpoint_search" else "--grounded-search-pilot"]
+                             + (["--seed", str(policy_seed)] if policy_seed is not None else []), env, Path.cwd())
             deadline = time.monotonic() + 150.
             while time.monotonic() < deadline:
                 check_processes()
@@ -718,6 +722,7 @@ def main():
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--method", choices=("joint_bc", "dual_vln_hier", "dual_wam_mpc"), default="joint_bc")
     parser.add_argument("--policy-python", type=Path)
+    parser.add_argument("--policy-seed", type=int, help="Optional torch/planner seed, separate from scene/order seed")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--role-mode", choices=("fixed", "unassigned"), default="fixed",
                         help="Opt-in unassigned checkpoint_search: either UAV may discover; old rule pilots remain fixed-role diagnostics")
@@ -747,6 +752,7 @@ def main():
     if args.execute_flight and args.control_link_check:
         parser.error("--control-link-check cannot be combined with --execute-flight")
     try:
+        validate_policy_seed(args.policy_seed)
         validate_search_role_mode(args.role_mode, args.policy, args.teammate_response)
         validate_startup_evidence_mode(args.startup_evidence_frames, execute_flight=args.execute_flight,
                                       control_link_check=args.control_link_check, policy=args.policy,

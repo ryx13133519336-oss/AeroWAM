@@ -41,10 +41,14 @@ SIGSTOP 根层PPID=1的进程；临时停止 Ubuntu 校时，清掉残留 offset
 python -m benchmark.px4_gazebo.model_handoff.wsl_clock_session --output-dir D:/AeroWAM-data/wsl_clock_check_NEW --mode probe --execute
 ```
 
-probe只测60秒，不起飞。确需一轮冻结JointBC诊断时将mode改为pilot，另换输出目录。
+probe只测60秒，不起飞。确需一轮冻结模型诊断时将mode改为pilot，另换输出目录。
+`--method`可选joint_bc（默认）、dual_vln_hier或dual_wam_mpc；只允许已核验的
+三个confirm_fix_v1_seed_0权重，准备前和运行前均核对冻结SHA256。
+`--policy-seed 0`默认显式固定torch/规划随机种子，不改变权重；旧直接运行入口仍
+保持未指定种子时的兼容行为。不同seed或模型不合并为同一重复实验。
 pilot使用已核验的当前本机路径、Ubuntu-22.04、ryx、ROS Humble及px4_ros2_ws；
-不用于别的部署。pilot还依赖本地尚未提交的角色自由接线；旧仓库缺少role-mode时
-在生成脚本前拒绝，probe不依赖这些本地模型修改。
+不用于别的部署。角色自由接线已在75fdf76提交；旧仓库缺少role-mode时
+在生成脚本前拒绝，probe不依赖模型权重。
 90秒RUN预算、420秒主监督上限及普通降落清理逻辑保留。
 该入口没有开启Gazebo GUI，不预先分配发现/确认角色；事件仍来自公开辅助报告器，
 不能宣称模型已学会动态角色分工。旧固定UAV1队友扰动未迁移到此模式。
@@ -58,3 +62,13 @@ pilot任务未成功。若进程意外退出，先核对恢复日志，不能把
 这是一项已实测的临时运行办法，不是永久修复微软WSL内置校时，也没有验证休眠、
 宿主大幅改时或其他负载组合。无需迁移原生Linux才能继续当前诊断；原生Linux仍可
 作为后续独立平台验证选项。
+
+## 2026-10-19 新边界
+
+DualVLN角色自由蓝色诊断已实际飞行14次决策；120.620秒会话全程10ms门通过，
+搜索距离耗尽而失败，正常落地恢复。下一轮DualWAM在Ubuntu清理校时修正后
+读回offset=1908us、frequency=0、tick=10000、status=0，被原有零残留前置检查拒绝；
+没有开始预检或模型，不算模型任务失败，也不能说这次已测出10ms门失败。
+两层恢复确认。未自动重试、未改变拒绝条件或系统状态位；报告改为保留具体读数，
+并区分“未评估”与“失败”。临时隔离办法仍有此未解决边界，不能当作永久稳定修复。
+完整原始目录、像素/轨迹核对和协议见[FROZEN_SEARCH_DIAGNOSTIC_CN.md](FROZEN_SEARCH_DIAGNOSTIC_CN.md)。

@@ -16,7 +16,7 @@ import threading
 import time
 
 from .policy_client import PolicyClient
-from .policy_server import InferencePolicy, ReusableThreadingTCPServer, _Handler, search_composite
+from .policy_server import InferencePolicy, ReusableThreadingTCPServer, _Handler, search_composite, validate_policy_seed
 from .protocol import AGENT_IDS, ModelObservation
 from .search_reporter import REPORTER_VERSION
 from .search_approach_reporter import APPROACH_REPORTER_VERSION
@@ -97,6 +97,7 @@ def main():
     parser.add_argument("--requests", type=Path, nargs="+", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--policy-seed", type=int, help="Optional torch/planner seed")
     parser.add_argument("--limit", type=int, default=120)
     parser.add_argument("--reporter", choices=("scan", "approach"), default="scan",
                         help="approach only changes auxiliary reports, never checkpoint actions")
@@ -107,6 +108,7 @@ def main():
     if args.output_dir.exists():
         parser.error("Output directory must be new; existing evidence is never overwritten")
     try:
+        validate_policy_seed(args.policy_seed)
         inputs = [(path, load_observations(path, args.limit)) for path in args.requests]
         identities = [observations[0].episode_id for _, observations in inputs]
         if len(set(identities)) != len(identities):
@@ -121,14 +123,14 @@ def main():
                             APPROACH_REPORTER_VERSION if args.reporter == "approach" else REPORTER_VERSION),
                "role_mode": args.role_mode,
                "action_source": "checkpoint_only_no_rule_navigation_override",
-               "timeout_ms": 400, "device": args.device,
+               "timeout_ms": 400, "device": args.device, "policy_seed": args.policy_seed,
                "task_success_evaluated": False, "closed_loop_evaluated": False,
                "training_performed": False, "flight_started": False,
                "observation_history_source": "recorded_other_behavior_policy",
                "private_annotations_read": False, "episodes": [], "status": "initializing"}
     try:
         started = time.monotonic()
-        model = InferencePolicy(args.checkpoint, device=args.device)
+        model = InferencePolicy(args.checkpoint, device=args.device, seed=args.policy_seed)
         summary.update(model_config=asdict(model.config), initialization_wall_s=time.monotonic() - started)
         if model.config.method != args.method:
             raise ValueError("Checkpoint method differs from requested method")

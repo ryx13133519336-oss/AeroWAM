@@ -15,11 +15,12 @@ import xml.etree.ElementTree as ET
 from .annotation_models import CAMERA_MODEL, LABEL_SENSOR, verify
 
 
-def run(output: Path, timeout_s: float = 40., scene_case: str = "partial", rig_models: Path | None = None) -> dict:
+def run(output: Path, timeout_s: float = 40., scene_case: str = "partial", rig_models: Path | None = None,
+        *, prepared_scene=None) -> dict:
     if not 1 <= timeout_s <= 60:
         raise ValueError("timeout must be 1..60 seconds")
     from .search_pilot_scene import OCCLUSION_CASES, static_occlusion_world
-    if scene_case not in {"partial", "clear", "full", *OCCLUSION_CASES}:
+    if prepared_scene is None and scene_case not in {"partial", "clear", "full", *OCCLUSION_CASES}:
         raise ValueError("Unknown static scene case")
     if scene_case in OCCLUSION_CASES and rig_models is None:
         raise ValueError("Search occlusion diagnostic requires paired camera models")
@@ -69,6 +70,12 @@ def run(output: Path, timeout_s: float = 40., scene_case: str = "partial", rig_m
                 prefix = f"/world/aerowam_annotation_probe/model/{name}/link/camera_link/sensor"
                 pairs.append({"agent_id": f"uav_{index}", "rgb": prefix + "/camera/image",
                               "segmentation": prefix + f"/{LABEL_SENSOR}/segmentation"})
+        if prepared_scene is not None:
+            # Trusted static-scene adapter only. No policy, PX4 or flight path.
+            tree, pairs, resources = prepared_scene
+            if (len(pairs) != 2 or {p["agent_id"] for p in pairs} != {"uav_0", "uav_1"}):
+                raise ValueError("External diagnostic requires two distinct camera pairs")
+            summary["scene_resources"] = resources
         summary["camera_pairs"] = pairs
         world = output / "world.sdf"
         tree.write(world, encoding="utf-8", xml_declaration=True)

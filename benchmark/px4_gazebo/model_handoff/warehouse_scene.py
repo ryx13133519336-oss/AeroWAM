@@ -8,7 +8,7 @@ import shutil
 import xml.etree.ElementTree as ET
 import zipfile
 
-from .annotation_models import CAMERA_MODEL, LABEL_SENSOR, verify as verify_cameras
+from .annotation_models import AIRCRAFT_MODEL, CAMERA_MODEL, LABEL_SENSOR, verify as verify_cameras
 from .search_pilot_scene import _search_objects
 
 COMMIT = "3c23a698bf0b4e366ddf8b084af507c519bd3483"
@@ -24,6 +24,8 @@ CAMERAS = {
     "rack_back": ((3., -2.14, 1.2, 0., 0., 0.), (3., -.33, 1.2, 0., 0., 0.)),
 }
 TARGETS = {"probe_red": (5.5, -2.14, 1.2), "probe_blue": (5.5, -.33, 1.2)}
+RUNTIME_WORLD = "aerowam_warehouse_startup"
+AIRCRAFT_POSES = ((0., -2., .1, 0., 0., 0.), (0., 2., .1, 0., 0., 0.))
 
 
 def sha256(path):
@@ -211,3 +213,48 @@ def static_world(package, camera_models, case):
                                         "classic_visual_layers": "omitted", "mesh_units": "unchanged",
                                         "source_world": "no_roof_small_warehouse.world"},
                          "flight_admitted": False}
+
+
+def aircraft_world(package, camera_models):
+    """Dual dynamic aircraft for disarmed integration only; no flight admission.
+
+    Candidate spawns are in the central aisle, not the narrow rack channels.
+    No role, waypoint or private target coordinate is passed to a controller.
+    """
+    tree, _, resources = static_world(package, camera_models, "rack_back")
+    scene = tree.getroot().find("world")
+    scene.set("name", RUNTIME_WORLD)
+    for index in range(2):
+        scene.remove(scene.find(f"model[@name='annotation_camera_{index}']"))
+    for filename, name in (("user-commands", "UserCommands"), ("contact", "Contact"),
+                           ("imu", "Imu"), ("air-pressure", "AirPressure"),
+                           ("navsat", "NavSat"), ("magnetometer", "Magnetometer")):
+        ET.SubElement(scene, "plugin", filename=f"gz-sim-{filename}-system",
+                      name=f"gz::sim::systems::{name}")
+    scene.find("physics/max_step_size").text = "0.004"
+    ET.SubElement(scene, "gravity").text = "0 0 -9.81"
+    # Explicit simulation georeference matching the installed PX4 lawn world;
+    # required by Harmonic NavSat/Magnetometer, not a real deployment location.
+    spherical = ET.SubElement(scene, "spherical_coordinates")
+    for key, value in (("surface_model", "EARTH_WGS84"), ("world_frame_orientation", "ENU"),
+                       ("latitude_deg", "47.397971057728974"),
+                       ("longitude_deg", "8.546163739800146"), ("elevation", "0")):
+        ET.SubElement(spherical, key).text = value
+    ET.SubElement(scene, "magnetic_field").text = "6e-06 2.3e-05 -4.2e-05"
+    pairs = []
+    for index, pose in enumerate(AIRCRAFT_POSES):
+        include = ET.SubElement(scene, "include")
+        ET.SubElement(include, "uri").text = (Path(camera_models).resolve() / AIRCRAFT_MODEL / "model.sdf").as_uri()
+        ET.SubElement(include, "name").text = f"annotation_uav_{index}"
+        ET.SubElement(include, "pose").text = " ".join(map(str, pose))
+        prefix = f"/world/{RUNTIME_WORLD}/model/annotation_uav_{index}/link/camera_link/sensor"
+        pairs.append({"agent_id": f"uav_{index}", "rgb": prefix + "/camera/image",
+                      "segmentation": prefix + f"/{LABEL_SENSOR}/segmentation"})
+    resources = {**resources, "scene_case": "dual_aircraft_disarmed", "camera_poses_enu": None,
+                 "aircraft_spawn_poses_enu": AIRCRAFT_POSES, "world_name": RUNTIME_WORLD,
+                 "camera_pairs": pairs, "role_assignment": None, "flight_admitted": False,
+                 "readiness": "unarmed_startup_only",
+                 "georeference": "PX4_lawn_simulation_reference",
+                 "remaining_flight_gates": ["aircraft_clearance", "physical_contact_detection",
+                                            "scene_bound_controller", "role_free_motion_acceptance"]}
+    return tree, resources

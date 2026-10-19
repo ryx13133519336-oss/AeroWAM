@@ -121,7 +121,8 @@ def odometry_snapshot(message):
             "pose_frame": int(message.pose_frame), "velocity_frame": int(message.velocity_frame)}
 
 
-def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77, udp_only=False):
+def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77, udp_only=False,
+        prepared_scene=None, agent_path=None, gui=False):
     if not 10 <= timeout_s <= 180 or type(domain) is not int or not 1 <= domain <= 100:
         raise ValueError("Timeout must be 10..180 seconds; ROS domain must be 1..100")
     if os.name == "nt":
@@ -138,10 +139,14 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
     from gz.msgs10.image_pb2 import Image
     executable = px4_root / "build/px4_sitl_default/bin/px4"
     rootfs = px4_root / "build/px4_sitl_default"
-    agent = shutil.which("MicroXRCEAgent")
+    agent = str(agent_path) if agent_path is not None else shutil.which("MicroXRCEAgent")
     if not executable.is_file() or not agent:
         raise FileNotFoundError("PX4 executable and MicroXRCEAgent are required")
-    tree = build_world(px4_root, models)
+    if prepared_scene is None:
+        tree, scene_resources = build_world(px4_root, models), None
+    else:
+        tree, scene_resources = prepared_scene
+    world_name = tree.getroot().find("world").get("name")
     output.mkdir(parents=True, exist_ok=False)
     output = output.resolve()
     tree.write(output / "world.sdf", encoding="utf-8", xml_declaration=True)
@@ -161,12 +166,15 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
     node = ros = None
     rclpy_started = False
     lock = threading.Lock()
-    frames, counts, latest_status, odometry = {}, {}, {}, {}
+    frames, counts, latest_status, odometry, received_ros = {}, {}, {}, {}, {}
     summary = {"schema": "aerowam-annotation-startup/1-draft", "partition": partition,
                "ros_domain_id": domain, "dds_port": port, "px4_instances": list(INSTANCES),
                "startup_passed": False, "flight_ready": False, "live_multitask_ready": False,
                "motion_commands_sent": 0, "world_sha256": hashlib.sha256((output / "world.sdf").read_bytes()).hexdigest(),
                "model_resources": verify(models), "dds_transport": "udp_only_diagnostic" if udp_only else "inherited"}
+    summary["world_name"] = world_name
+    if scene_resources is not None:
+        summary["scene_resources"] = scene_resources
 
     def spawn(name, argv, env, cwd):
         log = (output / f"{name}.log").open("xb")
@@ -180,14 +188,18 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
         env = dict(os.environ)
         model_dir = px4_root / "Tools/simulation/gz/models"
         env["GZ_SIM_RESOURCE_PATH"] = str(model_dir) + os.pathsep + env.get("GZ_SIM_RESOURCE_PATH", "")
+        plugin_dir = px4_root / "build/px4_sitl_default/src/modules/simulation/gz_plugins"
+        if plugin_dir.is_dir():
+            env["GZ_SIM_SYSTEM_PLUGIN_PATH"] = str(plugin_dir) + os.pathsep + env.get("GZ_SIM_SYSTEM_PLUGIN_PATH", "")
+            summary["px4_plugin_directory"] = str(plugin_dir)
         # Avoid inherited server.config injecting a different sensor system.
         env.pop("GZ_SIM_SERVER_CONFIG_PATH", None)
         node = Node()
         rclpy.init(args=[])
         rclpy_started = True
         ros = rclpy.create_node("aerowam_annotation_startup")
-        qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
-                         durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
+                         durability=DurabilityPolicy.VOLATILE)
         for index in (0, 1):
             prefix = f"/annotation_smoke_{index}/fmu/out"
             for key, msg_type, suffix in (("status", VehicleStatus, "vehicle_status_v4"),
@@ -195,14 +207,16 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
                 counts[f"{key}_{index}"] = 0
                 def receive(msg, k=key, i=index):
                     counts[f"{k}_{i}"] += 1
+                    received_ros[k, i] = time.monotonic()
                     if k == "status":
-                        latest_status[i] = {"arming_state": int(msg.arming_state), "failsafe": bool(msg.failsafe)}
+                        latest_status[i] = {"arming_state": int(msg.arming_state), "failsafe": bool(msg.failsafe),
+                                            "pre_flight_checks_pass": bool(msg.pre_flight_checks_pass)}
                     else:
                         odometry[i] = odometry_snapshot(msg)
                 ros.create_subscription(msg_type, f"{prefix}/{suffix}", receive, qos)
         pairs = []
         for index in (0, 1):
-            prefix = f"/world/{WORLD}/model/annotation_uav_{index}/link/camera_link/sensor"
+            prefix = f"/world/{world_name}/model/annotation_uav_{index}/link/camera_link/sensor"
             rgb, seg = prefix + "/camera/image", prefix + f"/{LABEL_SENSOR}/segmentation"
             pairs.append({"agent_id": f"uav_{index}", "rgb": rgb, "segmentation": seg})
             for topic in (rgb, seg + "/labels_map"):
@@ -224,10 +238,13 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
         summary["camera_pairs"] = pairs
         spawn("dds_agent", [agent, "udp4", "-p", str(port)], env, output)
         spawn("gazebo", ["gz", "sim", "-s", "-r", "--headless-rendering", "-v", "3", str(output / "world.sdf")], env, output)
+        if gui:
+            spawn("gui", ["gz", "sim", "-g", "-v", "3"], env, output)
         for index, instance in enumerate(INSTANCES):
             working = output / f"px4_work_{instance}"
             working.mkdir()
             px4_env = smoke_environment(env, partition=partition, domain=domain, port=port, index=index)
+            px4_env["PX4_GZ_WORLD"] = world_name
             spawn(f"px4_{index}", [str(executable), str(rootfs / "etc"), "-i", str(instance), "-w", str(working), "-d"], px4_env, rootfs)
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
@@ -242,7 +259,10 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
                                set(frames.get(pair["segmentation"] + "/labels_map", {}))) for pair in pairs}
             healthy = (len(latest_status) == 2 and all(not s["failsafe"] for s in latest_status.values()))
             finite_odometry = len(odometry) == 2 and all(item["finite"] for item in odometry.values())
-            if all(n >= 3 for n in pair_counts.values()) and all(n >= 2 for n in counts.values()) and healthy and finite_odometry:
+            now = time.monotonic()
+            fresh = all(now - received_ros.get((kind, i), -math.inf) <= limit
+                        for kind, limit in (("status", 2.), ("odometry", .5)) for i in (0, 1))
+            if all(n >= 3 for n in pair_counts.values()) and all(n >= 2 for n in counts.values()) and healthy and finite_odometry and fresh:
                 break
         else:
             raise TimeoutError(f"Startup streams missing/insufficient: ROS={counts}, pairs={pair_counts}")

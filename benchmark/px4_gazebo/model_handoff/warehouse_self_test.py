@@ -11,8 +11,9 @@ import xml.etree.ElementTree as ET
 
 from .warehouse_scene import (
     ARCHIVE_SHA256, CASES, COMMIT, SCHEMA, _inline_model, local_resource, prepare, sha256,
-    static_world, verify,
+    AIRCRAFT_POSES, RUNTIME_WORLD, aircraft_world, static_world, verify,
 )
+from .warehouse_startup import export
 
 
 class WarehouseTests(unittest.TestCase):
@@ -145,6 +146,41 @@ class WarehouseTests(unittest.TestCase):
     def test_unknown_case_rejected_before_resource_reads(self):
         with self.assertRaisesRegex(ValueError, "viewpoint"):
             static_world(self.root / "missing", self.root / "missing", "unknown")
+
+    def test_aircraft_scene_keeps_background_and_replaces_static_cameras(self):
+        static, _, resources = self.build_controls()[1]
+        with patch("benchmark.px4_gazebo.model_handoff.warehouse_scene.static_world",
+                   return_value=(deepcopy(static), [], resources)):
+            tree, contract = aircraft_world(self.root, self.root / "cameras")
+        scene = tree.getroot().find("world")
+        self.assertEqual(scene.get("name"), RUNTIME_WORLD)
+        self.assertEqual(scene.findtext("spherical_coordinates/world_frame_orientation"), "ENU")
+        self.assertEqual(scene.findtext("spherical_coordinates/surface_model"), "EARTH_WGS84")
+        self.assertIsNotNone(scene.find("magnetic_field"))
+        self.assertFalse(scene.findall("model[@name='annotation_camera_0']"))
+        self.assertEqual(len(scene.findall("include")), 2)
+        self.assertEqual(len(scene.findall(".//collision")), len(static.getroot().findall("world/.//collision")))
+        self.assertIsNone(contract["role_assignment"])
+        self.assertFalse(contract["flight_admitted"])
+        for index, include in enumerate(scene.findall("include")):
+            self.assertEqual(include.findtext("name"), f"annotation_uav_{index}")
+            self.assertEqual(tuple(map(float, include.findtext("pose").split())), AIRCRAFT_POSES[index])
+        names = {p.get("name") for p in scene.findall("plugin")}
+        for name in ("Contact", "Imu", "NavSat", "AirPressure", "Magnetometer", "UserCommands"):
+            self.assertIn(f"gz::sim::systems::{name}", names)
+
+    def test_export_private_contract_fingerprints_world_and_does_not_overwrite(self):
+        static, _, resources = self.build_controls()[1]
+        with patch("benchmark.px4_gazebo.model_handoff.warehouse_startup.aircraft_world",
+                   return_value=(static, {**resources, "world_name": RUNTIME_WORLD})):
+            output = self.root / "export"
+            result = export(self.root, self.root, output)
+            self.assertEqual(result["world_sha256"], sha256(output / "world.sdf"))
+            self.assertFalse(result["flight_admitted"])
+            self.assertEqual(result["motion_commands_sent"], 0)
+            self.assertTrue((output / "scene_contract.private.json").is_file())
+            with self.assertRaises(FileExistsError):
+                export(self.root, self.root, output)
 
 
 if __name__ == "__main__":

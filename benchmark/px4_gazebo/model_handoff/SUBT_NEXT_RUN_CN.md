@@ -120,6 +120,8 @@ source /home/ryx/px4_ros2_ws/install/setup.bash
 
 准入前应同时看到 `startup_passed=true`、`control_link_verified=true`、两条新鲜 `result=0` disarm ACK、`motion_commands_sent=0` 和 `owned_processes_stopped=true`。失败目录必须保留，不能放宽超时或把启动检查写成飞行成绩。即使通过，`flight_admitted=false` 仍保持不变。
 
+2026-10-21 的已审计结果目录为 `D:\AeroWAM-data\subt_startup_control_20261021_195001`（WSL 路径 `/mnt/d/AeroWAM-data/subt_startup_control_20261021_195001`）：`startup_passed=true`、`control_link_verified=true`，两机各有 `command=400/result=0` ACK，双机 status/odometry 与相机配对正常；同时 `flight_ready=false`、`setpoint_execution_verified=false`、`motion_commands_sent=0`。`px4_0.log` 和 `px4_1.log` 当前报告的预检原因是 `no heading reference`、`No connection to the GCS`。该证据只支持控制链诊断，不支持 PX4 飞行、模型任务成功率、世界模型分数或榜单入榜。
+
 ## 4. 开发集 8 格全部通过后训练探索性基线
 
 以下在 Windows PowerShell 运行，使用已确认安装 scikit-learn 的 Windows Python。--train-root 会重新独立核验数据、为每格选择一条通过的 episode；不足 8 格就报错，不训练。测试使用独立目录的红球下行 episode，不加入训练，也不作为 checkpoint 选择依据。

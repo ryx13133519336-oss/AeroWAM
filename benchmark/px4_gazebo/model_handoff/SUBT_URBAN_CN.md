@@ -170,6 +170,12 @@ source /home/ryx/px4_ros2_ws/install/setup.bash
 
 `role_assignment=None`，不能把相机编号当作永久搜索/确认角色。世界/资源契约、目标位置、实例图、射线和私有验收结果只进仿真/安全/裁判侧，策略只接允许的公开观测及队友通信。之后的模型闭环、队友行为变化与新任务组合迁移仍需真实测评；本次静态对照不提供那些结论。
 
+### PX4 控制链只读检查结果（2026-10-21）
+
+`subt_startup --control-link-check` 已在 `subt_startup_control_20261021_195001` 通过控制链检查：双机相机/遥测配对正常，六个逐机控制 writer 均有一个匹配 reader，两个机体都返回新鲜的 `command=400`、`result=0` 未解锁 disarm ACK，且 `motion_commands_sent=0`。这证明 ROS 2/PX4 控制接口的只读 round-trip 可用。
+
+该运行仍明确为 `flight_ready=false`、`setpoint_execution_verified=false`、`flight_admitted=false`，没有发送 offboard、轨迹、解锁或起飞命令，也没有模型任务执行或成功率。PX4 日志中的当前预检原因是 `no heading reference` 与 `No connection to the GCS`；不能通过关闭预检、放宽门限或修改时钟来把它改写成飞行准入。后续真实动作接入前，应分别补齐合法的定位/航向来源与受支持的安全控制链，再由独立审计确认，不能把 disarm ACK 写入模型榜单。
+
 ## 楼梯跨层 handoff 专家示范（2026-10-21）
 
 此开发示范服务于本文开头的研究主线，不把场景接入或教师成功冒充模型成绩。目标沿原建筑折返楼梯由一层到二层，经过中间平台，再从二层出口进入走廊；路线约 34 m，目标中心垂直跨度约 10 m。楼梯踏面附近的支撑高度由固定碰撞网格求得，目标包围盒沿全路线做保守扫掠检查，不是穿过楼板的直线插值。相机代理另做体积净空和相互间距检查；这些检查不等于真实无人机机体、旋翼或接触动力学验收。

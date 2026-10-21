@@ -39,6 +39,18 @@
 
 私有初始相机摆放仍使用教师计划；目前是集中式双机控制，尚无 normal/delayed 独立队友策略；不是专家采集替代品，也不能据此评测世界模型真实飞行动力学。`proxy_summary.json` 的 success 固定 null；审计可单独给出 `proxy_event_success`，不会进入正式榜单。
 
+### Grounded 模型接入桥（2026-10-21）
+
+新增 `subt_handoff_grounded_bridge.py`，把已有 grounded policy 的 `TargetReport` 转换为 SubT Core `ModelOutput`。桥接层逐事件保留 `agent_id`、当前相机帧时间戳和归一化 bbox，并将 `found/request/accept/confirm` 映射到 `handoff.*` 命名空间；它不根据事件推断固定 source/receiver 角色。
+
+默认模式会把旧模型的 body-FLU 位移全部降为逐机 hold，只评测 grounded 事件能否进入 SubT proxy；这是为了避免未经验证的坐标系被当作楼梯 ENU 动作。`allow_proxy_enu_actions=True` 是单独的运动学诊断开关，只有完成 SubT 机体包络、楼梯净空和动作 trace 审计后才能使用。桥接自测命令：
+
+```bash
+python -B -m benchmark.px4_gazebo.model_handoff.subt_handoff_grounded_bridge_self_test
+```
+
+该桥仍不提供 PX4 飞行准入、动作执行确认或正式成功率；真实模型运行必须继续通过 `subt_handoff_proxy_audit.py`，而正式榜单还要求 `flight_admitted=true` 和 `action_trace_verified=true`。
+
 命令见 [SUBT_NEXT_RUN_CN.md](SUBT_NEXT_RUN_CN.md)。长时运行由用户执行，助手不占用 Gazebo 等待。
 
 ## 还缺什么

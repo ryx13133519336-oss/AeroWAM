@@ -12,6 +12,8 @@
 
 **还不能把原 `search_pilot --execute-flight` 命令直接当成这个场景的飞行入口。** 当前没有修改旧控制器、默认世界或模型输入。双机只读启动成功，但结束时两机 `pre_flight_checks_pass=false`；`flight_ready=false`、`flight_admitted=false`。尚未验证机体净空、楼内飞行、跨层路线和真实模型协作闭环。没有任何新模型成绩。
 
+2026-10-21 的冻结事件头 checkpoint 已通过一次跨 Windows/WSL 的 5 秒 Gazebo 代理 smoke（`D:/AeroWAM-data/subt_proxy_checkpoint_20261021_192240`）：11 个模型请求和 11 个动作服务请求均被独立重建，进程清理无误。该适配器只输出 hold 动作并拒绝无 bbox 的 grounded event，因此 `proxy_event_success=false`、`kinematic_proxy=true`、`px4_started=false`、`flight_admitted=false`；这只是实时 Core 接口证据，不是飞行或 handoff 成绩。下一次终端操作应先运行本文件后面的不解锁 startup 检查，确认两机 PX4 遥测和控制端点，再讨论真实动作适配。
+
 ## 一条命令打开（现有 WSL）
 
 在 WSL 终端运行，仓库是 `/mnt/d/AeroWAM`，不是旧的桌面副本：

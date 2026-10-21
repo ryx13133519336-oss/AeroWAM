@@ -47,9 +47,9 @@ cd /mnt/d/AeroWAM
 
 先在步骤 2 命令末尾加 `--limit 1`，只补一条验证；该条 collected_and_audited 后，去掉 `--limit 1` 补其余缺失项。如果仍 audit_failed，先读取新目录 batch_audit_error.txt，不继续重复采集。
 
-## 3. 可选：真实 Gazebo 代理动作接口 smoke
+## 3. 真实 Gazebo 代理动作接口 smoke（已通过一次）
 
-此新入口尚待真实 Gazebo 验收。hold reference 只返回零动作且不报告事件，预期不会完成 handoff；用途是验证实时传感、core 协议、动作服务和清理。先只跑 5 秒仿真时间；不能与步骤 1/2 并发。若模型输出异常、缺帧、代理碰撞或进程退出，保留目录用于诊断。
+hold smoke 已在 `D:\AeroWAM-data\subt_proxy_hold_20261021_190821` 通过：11 帧、11 次动作服务请求，独立审计通过，清理错误为空。hold reference 只返回零动作且不报告事件，预期不会完成 handoff；本步骤用途是验证实时传感、core 协议、动作服务和清理，不是模型成绩。不能与步骤 1/2 并发。若后续模型输出异常、缺帧、代理碰撞或进程退出，保留目录用于诊断。
 
 ```bash
 cd /mnt/d/AeroWAM

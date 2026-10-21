@@ -11,13 +11,33 @@
 
 这些内容还不能证明模型已经在楼梯场景执行 handoff，也不能产生正式成功率。
 
+## 已完成的模型接口 runner
+
+`subt_handoff_model_eval.py` 使用已发布的 `core.ModelInput/ModelOutput`，读取已经独立审计的原始楼梯 episode，只发送 RGB、原始公开代理本体状态、已送达示范消息、模型动作历史和任务指令。代理状态不伪造成 PX4 速度或健康状态。响应使用逐机 `handoff.*` 事件，避免旧单个 `intent` 的固定方向语义。
+
+这是 recorded-observation replay：相机帧不响应模型动作，消息来自示范者，不来自当前模型。因此 `success=null`、`closed_loop=false`、`flight_admitted=false`，不生成正式 evaluation report，也不能交给正式榜单聚合器。模型 manifest 在此仅绑定运行身份，尚不证明模型权重和训练资料正确。
+
+`io_trace.jsonl` 保存完整公共请求、原始 JSON 响应、时延和失败；`subt_handoff_model_audit.py` 在单独命令中重新审计原始 episode、逐条重建请求、核对响应时间与逐机动作，并拒绝篡改摘要。审计通过仍不代表任务成功。
+
+新增 `subt_handoff_evaluator.py` 是供后续真实执行器调用的私有事件状态机：角色来自唯一有效发现报告；接受必须晚于请求至少 0.5 秒；确认必须有原观察者至少 1 秒物理遮挡和接收者持续带框报告。零可见像素本身不能证明物理遮挡。它仍需执行器提供曝光对齐的私有证据，没有独立授予飞行权限。
+
+## 新增的 Gazebo 动作驱动代理入口（待运行验收）
+
+`subt_handoff_proxy.py` 启动独立 Gazebo world，私有楼梯路线只驱动标靶；两路相机在初始化后完全使用模型的逐机位移和 yaw 更新，初始 pitch 保持不变。每个动作前检查保守代理扫掠体积、两相机距离及目标距离。目标位姿服务接受不等于曝光对齐的精确执行，更不是飞行动作。
+
+本入口复用 core.ModelInput/ModelOutput，消息来自当前模型事件并延迟 0.5 s，不使用教师事件。它保存公共请求、模型响应、服务请求、RGB、原生私有实例图和私有裁判结果。`subt_handoff_proxy_audit.py` 单独重建消息/动作历史、实例框、全目标遮挡、事件顺序及动作服务请求。
+
+此实现尚未运行真实 Gazebo 验收，只有离线回归通过。私有初始相机摆放仍使用教师计划；目前是集中式双机控制，尚无 normal/delayed 独立队友策略；不是专家采集替代品，也不能据此评测世界模型真实飞行动力学。`proxy_summary.json` 的 success 固定 null；审计可单独给出 `proxy_event_success`，不会进入正式榜单。
+
+命令见 [SUBT_NEXT_RUN_CN.md](SUBT_NEXT_RUN_CN.md)。长时运行由用户执行，助手不占用 Gazebo 等待。
+
 ## 还缺什么
 
-### 1. SubT 模型闭环 runner
+### 1. SubT PX4 闭环适配器
 
-当前 `subt_handoff_collect.py` 是特权专家/运动学代理采集器：它沿规划路线移动目标和相机代理，不接收模型动作。因此它只能产生训练/接口诊断数据，不能作为模型成绩。
+当前 `subt_handoff_collect.py` 是特权专家/运动学代理采集器：它沿规划路线移动目标和相机代理，不接收模型动作。因此它只能产生训练/接口诊断数据，不能作为模型成绩。回放 runner 已经覆盖模型协议和报告生成，但还没有真实 PX4 控制链。
 
-需要新增一个独立的 SubT evaluation runner：
+真实准入仍需要一个独立的 SubT PX4 adapter：
 
 - 启动固定版本 SubT Urban 楼梯 world；
 - 两架真实 PX4/Gazebo x500 由模型输出控制，或明确标记为 `diagnostic_proxy`；
@@ -77,9 +97,9 @@ warehouse 可作为第一套独立场景族，但必须先完成统一 adapter �
 
 - 选定第一批要接入的开源模型及其 checkpoint/权重来源；
 - 给每个模型指定 adapter manifest 和推理超时；
-- 准备能在当前 WSL/PX4/Gazebo 环境运行的 SubT x500 world 与安全清理路径；
+- 在终端执行 [SUBT_NEXT_RUN_CN.md](SUBT_NEXT_RUN_CN.md) 的长时续采和验收；SubT x500 world、动作链和审计代码由助手继续实现；
 - 与 warehouse 对话冻结队友行为 manifest、独立场景 adapter 和评测起点；
-- 确认正式榜单只接受真实 PX4/Gazebo 闭环，还是先发布单独的 `diagnostic_proxy` 表。
+- 当前正式榜单继续仅接收通过准入的真实 PX4/Gazebo 闭环，代理结果只保留为诊断，不要求重复确认。
 
 ## 检查命令
 
@@ -87,6 +107,27 @@ warehouse 可作为第一套独立场景族，但必须先完成统一 adapter �
 python -m benchmark.px4_gazebo.model_handoff.core.core_self_test
 python -m benchmark.px4_gazebo.model_handoff.subt_handoff_self_test
 python -m benchmark.px4_gazebo.model_handoff.subt_handoff_leaderboard_self_test
+python -m benchmark.px4_gazebo.model_handoff.subt_handoff_model_eval_self_test
+```
+
+使用本地模型 adapter 做已审计 episode 的协议回放（不会启动 PX4）：
+
+```bash
+python -m benchmark.px4_gazebo.model_handoff.subt_handoff_model_eval \
+  --episode /mnt/d/AeroWAM-data/subt_stair_blue_swapped_motion_only_v1 \
+  --output /mnt/d/AeroWAM-data/subt_model_eval_$(date +%Y%m%d_%H%M%S) \
+  --method-id my-model --method-kind repository_model \
+  --model-manifest /path/to/adapter_manifest.json \
+  --adapter my_adapter:infer
+```
+
+`my_adapter:infer` 接收 `core.ModelInput.to_wire()`，返回 `core.ModelOutput.to_wire()`。manifest JSON 至少包含匹配的 `method_id`、`method_kind`；完整权重准入后续另审。动作使用 `type=waypoint_delta`、`delta_enu_m=[dx,dy,dz]`、`delta_yaw_rad`，逐机事件包含 `agent_id/event/image_timestamp_ns/bbox_xyxy`。发现、接受和确认必须提供当前观察框，失视后的请求允许框为 null。
+
+若使用 TCP，把 `--adapter` 替换为 `--policy-endpoint HOST:PORT`；服务端必须返回 core 协议，旧 `ModelJointAction` 服务不能直接兼容。全零 hold reference 为 `benchmark.px4_gazebo.model_handoff.subt_handoff_model_io:hold`，仅检查传输，不代表视觉策略。独立检查：
+
+```bash
+python -m benchmark.px4_gazebo.model_handoff.subt_handoff_model_audit \
+  --run-dir /path/to/replay_output --output /path/to/new_replay_audit.json
 ```
 
 生成榜单时输入的是独立 evaluation reports，而不是训练数据、专家标签或 Gazebo 预览目录：

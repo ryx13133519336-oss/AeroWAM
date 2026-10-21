@@ -21,6 +21,7 @@ from .warehouse_scene import sha256
 def condition_coverage(reports):
     """Offline provenance only; frames are not independent condition replicates."""
     counts=Counter()
+    split_counts=Counter()
     unresolved=0
     for report in reports:
         condition=report.get('condition')
@@ -28,13 +29,27 @@ def condition_coverage(reports):
             unresolved+=1
             continue
         target=condition['target']['color']+':'+condition['target']['shape']
-        counts[(target,condition['swapped'],condition['teammate'],condition['message_delay_s'])]+=1
+        split=report.get('split',condition.get('split','development_training_only'))
+        route=report.get('route_id',condition.get('route_id',
+            'stair_descent_v1' if condition.get('reverse') else 'stair_ascent_v1'))
+        key=(target,condition['swapped'],condition['teammate'],condition['message_delay_s'])
+        if split=='development_training_only': counts[key]+=1
+        split_counts[(split,route)+key]+=1
     expected=set(itertools.product(('red:sphere','blue:cube'),(False,True),('normal','delayed'),(.5,2.)))
+    fixed_expected={key for key in expected if key[3]==.5}
     return {'unit':'episode_not_frame','recorded_condition_episodes':sum(counts.values()),
             'unresolved_legacy_episodes':unresolved,
             'counts':[{'target':key[0],'swapped':key[1],'teammate':key[2],
                        'message_delay_s':key[3],'episodes':count} for key,count in sorted(counts.items())],
             'complete_2x2x2x2_coverage':expected.issubset(counts),
+            'current_study':{'communication_effects_evaluated':False,'fixed_message_delay_s':.5,
+                'expected_conditions':8,'covered_conditions':len(fixed_expected.intersection(counts)),
+                'complete_2x2x2_fixed_communication':fixed_expected.issubset(counts),
+                'out_of_scope_condition_episodes':sum(count for key,count in counts.items() if key not in fixed_expected)},
+            'by_split':[{'split':key[0],'route_id':key[1],'target':key[2],
+                         'swapped':key[3],'teammate':key[4],
+                         'message_delay_s':key[5],'episodes':count}
+                        for key,count in sorted(split_counts.items())],
             'coverage_is_not_independent_replication_or_model_performance':True}
 
 
@@ -76,6 +91,10 @@ def export(episodes,output):
     for episode in episodes:
         frozen=json.loads((episode/'inspection.json').read_text(encoding='utf8'))
         if not frozen.get('passed'):raise ValueError('Independent inspection must pass')
+        if frozen.get('split', 'development_training_only')!='development_training_only':
+            raise ValueError('Held-out route episodes are evaluation-only and cannot enter training export')
+        if frozen.get('route_id', 'stair_ascent_v1')!='stair_ascent_v1':
+            raise ValueError('Only the development ascent route may enter training export')
         # Recompute, do not trust a bare success flag or stale file inventory.
         component=parse_component(frozen['component']['color']+':'+frozen['component']['shape'])
         current=inspect(episode,component=component,delay_s=frozen['message_delay_s'])
@@ -117,7 +136,8 @@ def export(episodes,output):
         with (output/name).open('x',encoding='utf8') as stream:
             for row in rows:stream.write(json.dumps(row,allow_nan=False)+'\n')
     design={'schema':'aerowam-subt-stair-training-export/1',
-        'split':'development_training_only','scene_families':1,'parent_episodes':len(episodes),
+        'split':'development_training_only','route_id':'stair_ascent_v1',
+        'scene_families':1,'parent_episodes':len(episodes),
         'samples':len(all_inputs),'images':len(image_hashes),'prediction_pairs':len(all_futures),
         'role_assignment':None,'sources':sources,
         'condition_coverage':condition_coverage([item[1] for item in prepared]),
@@ -126,7 +146,8 @@ def export(episodes,output):
         'BC_scope':'joint_event_prediction_with_privileged_teacher_not_decentralized_policy',
         'world_model_scope':'observation_sequence_prediction_not_control_conditioned_dynamics',
         'motion_supervision_exported':False,'model_evaluated':False,'flight_admitted':False,
-        'test_partition_created':False,'compositional_transfer_established':False,
+        'test_partition_created':True,'held_out_route_id':'stair_descent_v1',
+        'compositional_transfer_established':False,
         'independence':'frames_and_color_or_id_variants_of_one_scene_are_not_independent_scene_replicates',
         'limitations':['oracle_look_at_uses_hidden_target','no_action_conditioned_counterfactual_branches',
             'no_actual_PX4_trajectory','no_independent_test_scene',

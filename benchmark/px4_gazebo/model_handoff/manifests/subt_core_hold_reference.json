@@ -1,0 +1,12 @@
+{
+  "schema": "aerowam-subt-diagnostic-method/1",
+  "method_id": "subt_core_hold_reference_v1",
+  "method_kind": "reference_rule",
+  "factory": "benchmark.px4_gazebo.model_handoff.subt_handoff_model_io:hold_factory",
+  "interface": "aerowam-model-input/1 -> aerowam-model-output/1",
+  "policy": "zero translation and yaw; no events",
+  "weights": null,
+  "training_data": null,
+  "formal_score_eligible": false,
+  "purpose": "transport and action execution diagnostics only"
+}

@@ -4,6 +4,9 @@ import math
 import io
 from contextlib import redirect_stdout
 import unittest
+import json
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -14,6 +17,7 @@ from .subt_handoff_expert import EventExpert, duration, minimum_segment_separati
 from .subt_handoff_route import resample, sample, surface_height, AGENTS
 from .subt_handoff_data import learning_rows, condition_coverage
 from . import subt_handoff_inspect as inspection
+from . import subt_handoff_batch as batch
 
 
 class StairTests(unittest.TestCase):
@@ -71,17 +75,25 @@ class StairTests(unittest.TestCase):
     def test_factorial_plan_crosses_identity_target_motion_and_communication(self):
         plan=design()
         self.assertEqual(plan,design())
-        self.assertNotEqual(plan["conditions"],design(7)["conditions"])
-        rows=plan["conditions"]
-        self.assertEqual(len(rows),16)
-        self.assertEqual(len({r["condition_id"] for r in rows}),16)
+        self.assertNotEqual(plan["development"]["conditions"],design(7)["development"]["conditions"])
+        rows=plan["development"]["conditions"]
+        held_out=plan["held_out_route_test"]["conditions"]
+        self.assertEqual(len(rows),8)
+        self.assertEqual(len(held_out),8)
+        self.assertTrue(all(r["split"]=="development_training_only" and not r["reverse"] for r in rows))
+        self.assertTrue(all(r["split"]=="held_out_route_test" and r["reverse"] for r in held_out))
+        self.assertEqual(len({r["condition_id"] for r in rows}),8)
+        self.assertFalse(plan['communication_effects_evaluated'])
+        self.assertEqual(plan['controlled_constants']['message_delay_s'],.5)
+        self.assertNotIn('message_delay_s',plan['factors'])
         for target in ("red:sphere","blue:cube"):
             for swapped in (False,True):
                 subset=[r for r in rows if r["target"]==target and r["swapped"]==swapped]
                 self.assertEqual({(r["teammate"],r["message_delay_s"]) for r in subset},
-                                 {("normal",.5),("normal",2.),("delayed",.5),("delayed",2.)})
+                                 {("normal",.5),("delayed",.5)})
         self.assertIsNone(plan["role_assignment"])
-        self.assertFalse(plan["test_partition_created"])
+        self.assertTrue(plan["test_partition_created"])
+        self.assertEqual(plan["held_out_route_test"]["route_id"],"stair_descent_v1")
 
     def test_continuous_separation_detects_between_endpoint_crossing(self):
         self.assertAlmostEqual(minimum_segment_separation([2,0,0],[-2,0,0]),0.)
@@ -138,24 +150,79 @@ class StairTests(unittest.TestCase):
 
 
 class ExportTests(unittest.TestCase):
+    def test_batch_rejects_old_communication_matrix_before_collection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            plan=design()
+            plan['development']['conditions'][0]['message_delay_s']=2.
+            path=root/'plan.json'
+            path.write_text(json.dumps(plan),encoding='utf8')
+            with patch.object(batch,'collect') as collector:
+                with self.assertRaisesRegex(ValueError,'fixes communication'):
+                    batch.run('package','models',path,root/'captures')
+            collector.assert_not_called()
+            self.assertFalse((root/'captures').exists())
+
+    def test_batch_preserves_interrupted_attempt_and_writes_audited_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            plan=design()
+            row=plan['development']['conditions'][0]
+            plan['development']['conditions']=[row]
+            plan_path=root/'plan.json'
+            plan_path.write_text(json.dumps(plan),encoding='utf8')
+            output=root/'captures'
+            output.mkdir()
+            interrupted=output/(row['condition_id']+'_ascent')
+            interrupted.mkdir()
+            (interrupted/'partial.txt').write_text('preserve',encoding='utf8')
+            def capture(package,models,path,**kwargs):
+                path.mkdir()
+                return {'dataset_admitted':True}
+            with patch.object(batch,'collect',side_effect=capture) as collector, \
+                 patch.object(batch,'inspect',return_value={'passed':True,'files_sha256':{}}), \
+                 patch.object(batch,'read_rows',return_value=[]), \
+                 patch.object(batch,'contact_sheet'),redirect_stdout(io.StringIO()):
+                result=batch.run('package','models',plan_path,output,
+                                 split='development_training_only',limit=1)
+            self.assertEqual(collector.call_count,1)
+            self.assertEqual(result['results'][0]['status'],'collected_and_audited')
+            self.assertTrue((Path(result['results'][0]['output'])/'inspection.json').exists())
+            self.assertTrue((output/'batch_summary.json').exists())
+            self.assertEqual((interrupted/'partial.txt').read_text(),'preserve')
+            self.assertIn('_attempt002',result['results'][0]['output'])
+
+    def test_batch_limit_counts_failed_attempts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            plan_path=root/'plan.json'
+            plan_path.write_text(json.dumps(design()),encoding='utf8')
+            with patch.object(batch,'collect',return_value={'dataset_admitted':False}) as collector, \
+                 redirect_stdout(io.StringIO()):
+                result=batch.run('package','models',plan_path,root/'captures',
+                                 split='development_training_only',limit=1)
+            self.assertEqual(collector.call_count,1)
+            self.assertEqual(result['results'][0]['status'],'collection_failed')
+
     def test_condition_coverage_counts_episodes_and_does_not_infer_legacy_conditions(self):
         reports=[{'condition':None}]
         first=condition_coverage(reports)
         self.assertEqual(first['unresolved_legacy_episodes'],1)
         self.assertFalse(first['complete_2x2x2x2_coverage'])
-        for row in design()['conditions']:
+        for row in design()['development']['conditions']:
             color,shape=row['target'].split(':')
             reports.append({'condition':{'target':{'color':color,'shape':shape},
                 'swapped':row['swapped'],'teammate':row['teammate'],
                 'message_delay_s':row['message_delay_s']}})
         final=condition_coverage(reports)
-        self.assertTrue(final['complete_2x2x2x2_coverage'])
-        self.assertEqual(final['recorded_condition_episodes'],16)
-        self.assertEqual(len(final['counts']),16)
+        self.assertFalse(final['complete_2x2x2x2_coverage'])
+        self.assertTrue(final['current_study']['complete_2x2x2_fixed_communication'])
+        self.assertEqual(final['recorded_condition_episodes'],8)
+        self.assertEqual(len(final['counts']),8)
         self.assertTrue(all(row['episodes']==1 for row in final['counts']))
         duplicate=condition_coverage(reports+[reports[-1]])
-        self.assertEqual(duplicate['recorded_condition_episodes'],17)
-        self.assertEqual(len(duplicate['counts']),16)
+        self.assertEqual(duplicate['recorded_condition_episodes'],9)
+        self.assertEqual(len(duplicate['counts']),8)
 
     def examples(self):
         public=[{'sample_index':i,'stamp_ns':1_000_000_000+i*500_000_000,

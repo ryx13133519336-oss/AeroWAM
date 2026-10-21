@@ -2,6 +2,8 @@
 
 更新时间：2026-10-21
 
+当前用户约束：暂不研究通信影响，所有新采集固定消息延迟 0.5 s。当前开发计划为目标外观 × 身份置换 × 队友轨迹的 8 格；旧 16 格计划及 2 s 数据保留作历史证据，不用于本阶段条件覆盖。长时采集由用户在 WSL 执行，助手不自动启动或持续等待。
+
 ## 研究主线（不可偏移）
 
 > 在部分可观测、队友行为变化的环境中，评测双无人机协作技能和世界模型预测能力能否组合迁移到新任务。
@@ -39,7 +41,9 @@ WSL 中运行 Gazebo/PX4 前，先确认没有其他任务占用；不要全局 
 - `benchmark/px4_gazebo/model_handoff/subt_handoff_collect.py`：Gazebo 运动学代理采集，不启动 PX4
 - `benchmark/px4_gazebo/model_handoff/subt_handoff_inspect.py`：独立图像哈希、实例掩码、时间戳、因果回放审计
 - `benchmark/px4_gazebo/model_handoff/subt_handoff_data.py`：训练导出，公开输入和监督严格分离
-- `benchmark/px4_gazebo/model_handoff/subt_handoff_design.py`：固定种子 2×2×2×2 条件清单
+- `benchmark/px4_gazebo/model_handoff/subt_handoff_batch.py`：可恢复串行条件采集与逐 episode 独立审计
+- `benchmark/px4_gazebo/model_handoff/subt_handoff_learn.py`：公开观测事件基线与下一观察预测诊断；不提供飞控或正式模型成绩
+- `benchmark/px4_gazebo/model_handoff/subt_handoff_design.py`：固定种子 2×2×2 条件清单，通信固定 0.5 s
 - `benchmark/px4_gazebo/model_handoff/subt_handoff_preview.py`：楼梯 handoff GUI 预览，目标沿楼梯上升
 - `benchmark/px4_gazebo/model_handoff/SUBT_URBAN_CN.md`：完整命令和证据边界
 
@@ -107,13 +111,13 @@ cd /mnt/d/AeroWAM
 
 以下都还没有完成，不能在论文、报告或对话中宣称已经完成：
 
-- 没有训练事件策略或世界模型。
-- 没有模型成绩：成功率、确认延迟、失视恢复率、预测误差都未测。
-- 没有独立测试路线/场景，当前只有一个 scene family。
-- 没有完整 16 格条件矩阵；当前只有 3 条可用 episode。
-- 没有真正分散式双无人机策略；教师相机朝向使用隐藏目标位姿。
+- 已完成一次轻量探索性基线：上行两条现代 episode 训练，反向下行红球 episode 留出评估；独立重算通过，但不是正式模型成绩。
+- 没有独立新几何测试路线或新场景，当前只有一个 scene family。
+- 已加入同一 scene family 的下行方向留出路线 `stair_descent_v1`；一条红球身份置换 episode 已独立审计通过，不能把它称作独立场景。
+- 当前上行 8 格固定通信开发矩阵只有 1 格经独立审计通过：蓝方块、身份置换、delayed、0.5 s。normal/2 s 不计本阶段覆盖；红色 legacy 不补写条件。
+- 没有真正分散式双无人机策略；教师相机朝向使用隐藏目标位姿。已新增 `subt_handoff_model_eval.py`，复用 core 模型协议对独立审计 episode 做公开输入回放；保存完整请求/响应，由 `subt_handoff_model_audit.py` 单独重建审计。回放的 `success=null`，不生成正式榜单成绩。
 - 没有动作条件世界模型；目前没有“飞控动作 -> 下一状态”的真实执行记录。
-- 楼梯 handoff 还没有 PX4 飞行放行，所有数据明确 `flight_admitted=false`。
+- 楼梯 handoff 还没有 PX4 飞行放行，所有数据明确 `flight_admitted=false`。新增私有 `subt_handoff_evaluator.py` 状态机已测试逐机角色置换、消息因果和遮挡持续性；仍等待真实执行器提供相机/PX4 遥测、动作追踪和私有物理遮挡证据。
 - 目标是 `set_pose_vector` 运动学代理，不是带接触/轮驱动/碰撞故障的物理目标。
 - 没有系统验证丢包、乱序、延迟抖动、传感器噪声、失帧、通信中断。
 - 每个条件没有独立重复，不能做显著性检验或稳定性结论。
@@ -122,15 +126,17 @@ cd /mnt/d/AeroWAM
 
 ### 第一阶段：补齐可解释的数据条件
 
-使用 `subt_handoff_design.py` 生成的固定种子清单，补齐目标颜色、身份置换、队友轨迹、通信延迟的交叉条件。优先重新采集红色目标的现代条件，因为旧红色是 legacy；每条采集都必须通过 `subt_handoff_inspect`，不能只看 `summary.json`。
+使用 `subt_handoff_design.py` 生成的固定种子清单，补齐目标外观、身份置换、队友轨迹的 8 格交叉条件，通信延迟固定 0.5 s。优先重新采集红色目标的现代条件，因为旧红色是 legacy；每条采集都必须通过 `subt_handoff_inspect`，不能只看 `summary.json`。
+
+采集器现支持显式 `development_training_only` / `held_out_route_test` 分区，并核对上行 `stair_ascent_v1` 与下行 `stair_descent_v1`。`subt_handoff_batch.py` 会串行跳过已通过 episode、保留失败目录并在每条完成后运行独立审计；留出路线不能进入训练导出。
 
 ### 第二阶段：建立真正的学习评测
 
-先保持开发集和测试集严格按 episode/场景分组，不能随机切连续帧。训练事件策略和下一观察预测模型，至少报告：handoff 成功率、确认延迟、原观察者失视后的恢复率、下一帧 RGB/状态预测误差、通信延迟敏感性。
+先保持开发集和测试集严格按 episode/路线/场景分组，不能随机切连续帧。当前 `subt_handoff_learn.py` 只提供集中式公开观测事件分类和 8×8 下一观察 Ridge 诊断，已报告事件准确率、宏 F1、稀有事件召回、下一帧 RGB RMSE 与公开代理位姿误差；它没有训练分散式策略、动作条件世界模型或真实 PX4 控制。正式评测仍需更多独立 episode，至少报告 handoff 成功率、确认延迟、原观察者失视后的恢复率、下一帧 RGB/状态预测误差和队友运动变化敏感性；本阶段不评通信影响。
 
 ### 第三阶段：加入独立路线/场景留出
 
-新增一条不同几何结构或不同目标运动路线作为测试集，禁止将同一场景的相邻帧当独立泛化证据。只有完成留出测试后，才能讨论“组合迁移到新任务”。
+当前已加入下行方向留出作为同场景族任务测试，但它不是独立场景。仍需新增不同几何结构或不同场景路线，禁止将同一场景的相邻帧当独立泛化证据。只有完成真正留出测试后，才能讨论“组合迁移到新任务”。
 
 ### 第四阶段：再接 PX4 闭环
 
@@ -151,3 +157,7 @@ cd /mnt/d/AeroWAM
 可以把下面这段直接发送给下一个对话：
 
 > 请接管 `D:\AeroWAM` 中的 AeroWAM 工作。研究主线是“在部分可观测、队友行为变化的环境中，评测双无人机协作技能和世界模型预测能力能否组合迁移到新任务”。不要固定两架无人机角色，也不要把特权教师、运动学代理或 Gazebo 预览说成模型成绩或 PX4 飞行。先阅读 `benchmark/px4_gazebo/model_handoff/NEXT_DIALOG_HANDOFF_CN.md` 和 `SUBT_URBAN_CN.md`，检查当前 Git 提交 `130a522`。下一优先级是补齐楼梯 handoff 的条件矩阵和独立测试场景，然后训练/评测策略与世界模型；所有新证据必须通过独立审计，提交时只 stage 相关文件，不要碰工作区其他未相关修改。
+
+## 当前研究推进边界
+
+8 格只补齐部分可观测跨层 handoff 的基础条件，normal/delayed 仅代表两种预设队友运动。需要在训练前固定新任务和场景留出，补充失视后恢复及未见队友行为，再比较无协作/无预测基线、仅协作技能、仅预测模块、协作技能与预测组合的适当对照。当前事件分类与下一观察 Ridge 尚未形成组合决策闭环，不能证明组合迁移。下行方向反转只作初步方向留出。现阶段不继续用 2 s episode 训练当前固定通信实验；历史轻量基线保留但不作为本阶段结果。

@@ -105,12 +105,22 @@ def inspect(root, *, component=None, delay_s=None):
         raise ValueError('Collection or cleanup acceptance missing')
     if any(summary.get(k) is not False for k in ('px4_started','flight_admitted','model_evaluated','formal_score')):
         raise ValueError('Nonflying development-only provenance required')
-    if metadata.get('role_assignment') is not None or metadata.get('split')!='development_training_only':
-        raise ValueError('Role-unassigned development training required')
+    split=metadata.get('split')
+    if metadata.get('role_assignment') is not None or split not in {
+            'development_training_only','held_out_route_test'}:
+        raise ValueError('Role-unassigned development or held-out route data required')
     if not summary['geometry']['passed'] or not summary['expert_audit']['passed']:raise ValueError('Geometry audit failed')
     contract=json.loads((root/'scene_contract.private.json').read_text(encoding='utf8'))
     if sha256(root/'world.sdf')!=contract['world_sha256']:raise ValueError('World fingerprint changed')
     route=json.loads((root/'route.private.json').read_text(encoding='utf8'))
+    if condition is not None:
+        expected_route='stair_descent_v1' if condition['reverse'] else 'stair_ascent_v1'
+        if (condition.get('split', 'development_training_only')!=split
+                or condition.get('route_id', expected_route)!=expected_route
+                or metadata.get('route_id', expected_route)!=expected_route
+                or route.get('reverse') is not condition['reverse']
+                or (split=='held_out_route_test')!=condition['reverse']):
+            raise ValueError('Route identity and data partition disagree')
     public=read_rows(root/'public/observations.jsonl')
     supervision=read_rows(root/'supervision/labels.jsonl')
     private=read_rows(root/'private/annotations.jsonl')
@@ -190,8 +200,12 @@ def inspect(root, *, component=None, delay_s=None):
         'training_scope':'RGB_and_causal_joint_event_supervision_only',
         'motion_supervision_scope':'privileged_desired_camera_pose_not_executed_policy_action',
         'world_model_scope':'kinematic_observation_sequence_not_action_conditioned_UAV_dynamics',
+        'split':split,'route_id':metadata.get('route_id',
+            condition.get('route_id', 'stair_descent_v1' if condition.get('reverse') else 'stair_ascent_v1')
+            if condition is not None else 'legacy_unresolved'),
+        'same_scene_family_as_development':True,
         'decentralized_policy_evaluated':False,'model_score_eligible':False,'flight_admitted':False,
-        'limitations':['oracle_camera_points_at_hidden_target','proxy_not_PX4_flight','one_scene_family_no_independent_test',
+        'limitations':['oracle_camera_points_at_hidden_target','proxy_not_PX4_flight','same_scene_family_no_independent_scene',
             'sampled_preceding_pose_not_exact_exposure_actuation','no_contact_fault_validation']}
     if legacy:report['limitations'].append('legacy_capture_no_source_hash_or_pose_command_log')
     return report

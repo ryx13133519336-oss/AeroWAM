@@ -143,7 +143,12 @@ def resolve_message_delay(teammate, message_delay_s=None):
 
 
 def collect(package,models,output,*,component,speed=.3,swapped=False,teammate="normal",reverse=False,
-            timeout=720.,message_delay_s=None):
+            timeout=720.,message_delay_s=None,split="development_training_only"):
+    if split not in {"development_training_only","held_out_route_test"}:
+        raise ValueError("Declared development or held-out route split required")
+    if (split=="held_out_route_test") != bool(reverse):
+        raise ValueError("Held-out route test requires the audited reverse direction")
+    route_id="stair_descent_v1" if reverse else "stair_ascent_v1"
     delay_s=resolve_message_delay(teammate,message_delay_s)
     if not math.isfinite(timeout) or not 30<=timeout<=1800:
         raise ValueError("Finite bounded wall timeout 30..1800 required")
@@ -161,6 +166,7 @@ def collect(package,models,output,*,component,speed=.3,swapped=False,teammate="n
              "geometry":geometry,"expert_audit":expert_audit,"cleanup_errors":[]}
     summary['condition_private']={'target':{'color':component.color,'shape':component.shape},
         'speed_m_s':speed,'swapped':swapped,'teammate':teammate,'reverse':reverse,
+        'route_id':route_id,'split':split,
         'message_delay_s':delay_s,
         'message_delay_selection':'legacy_motion_default' if message_delay_s is None else 'explicit_independent'}
     summary['source_sha256']={name:sha256(Path(__file__).with_name(name)) for name in
@@ -195,7 +201,7 @@ def collect(package,models,output,*,component,speed=.3,swapped=False,teammate="n
     for folder in ("public/images","supervision","private"):
         (output/folder).mkdir(parents=True)
     metadata={"schema":summary["schema"],"instruction":f"Track the {component.color} {component.shape} across floors; hand off the same target and confirm after your teammate loses sight.",
-              "split":"development_training_only","scene_family":"subt_urban_2_story_stair_v1",
+              "split":split,"route_id":route_id,"scene_family":"subt_urban_2_story_stair_v1",
               "role_assignment":None,"expert_is_privileged":True,"px4_started":False,
               "observation_fields":["rgb","proprioception","messages"],
               "proprioception_source":"ideal_camera_proxy_pose_not_PX4_odometry",
@@ -379,11 +385,13 @@ def main():
     parser.add_argument("--teammate",choices=("normal","delayed"),default="normal")
     parser.add_argument("--message-delay-s",type=float,
                         help="independent communication delay 0..10 s; unset preserves legacy motion-dependent defaults")
+    parser.add_argument("--split",choices=("development_training_only","held_out_route_test"),
+                        default="development_training_only")
     parser.add_argument("--timeout",type=float,default=720.)
     args=parser.parse_args()
     result=collect(args.package,args.models,args.output_dir,component=args.target,speed=args.speed,
                    swapped=args.swapped,teammate=args.teammate,reverse=args.reverse,timeout=args.timeout,
-                   message_delay_s=args.message_delay_s)
+                   message_delay_s=args.message_delay_s,split=args.split)
     print(json.dumps({k:v for k,v in result.items() if k not in {"geometry","expert_audit","rendered_visibility"}}),flush=True)
     raise SystemExit(0 if result["dataset_admitted"] else 2)
 

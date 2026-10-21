@@ -49,6 +49,15 @@
 python -B -m benchmark.px4_gazebo.model_handoff.subt_handoff_grounded_bridge_self_test
 ```
 
+模型适配器可以通过 `subt_handoff_grounded_server.py` 暴露为 proxy 所需的 Core TCP 服务。`create_policy()` 必须返回接收旧 `ModelObservation`、返回 `GroundedAction` 的 callable；服务默认只转发视觉事件并保持两机 hold：
+
+```bash
+python -B -m benchmark.px4_gazebo.model_handoff.subt_handoff_grounded_server \
+  --factory your_adapter:create_policy
+```
+
+服务只绑定 `127.0.0.1`，单请求 400 ms 超时；`--allow-proxy-enu-actions` 仅用于完成坐标系和净空审计后的运动学诊断，不是 PX4 动作准入。
+
 该桥仍不提供 PX4 飞行准入、动作执行确认或正式成功率；真实模型运行必须继续通过 `subt_handoff_proxy_audit.py`，而正式榜单还要求 `flight_admitted=true` 和 `action_trace_verified=true`。
 
 命令见 [SUBT_NEXT_RUN_CN.md](SUBT_NEXT_RUN_CN.md)。长时运行由用户执行，助手不占用 Gazebo 等待。

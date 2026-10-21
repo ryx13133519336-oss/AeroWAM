@@ -155,6 +155,22 @@ source /home/ryx/px4_ros2_ws/install/setup.bash
 
 此开发示范服务于本文开头的研究主线，不把场景接入或教师成功冒充模型成绩。目标沿原建筑折返楼梯由一层到二层，经过中间平台，再从二层出口进入走廊；路线约 34 m，目标中心垂直跨度约 10 m。楼梯踏面附近的支撑高度由固定碰撞网格求得，目标包围盒沿全路线做保守扫掠检查，不是穿过楼板的直线插值。相机代理另做体积净空和相互间距检查；这些检查不等于真实无人机机体、旋翼或接触动力学验收。
 
+#### 楼梯 GUI 预览
+
+不要使用 `subt_urban preview --move-targets` 查看 handoff 路线；那个入口展示的是一楼工业标靶的水平往返小车。楼梯 handoff 使用独立入口，目标、载体和两个相机代理沿已审计的折返楼梯路线更新：
+
+```bash
+cd /mnt/d/AeroWAM
+/usr/bin/python3 -B -u -m benchmark.px4_gazebo.model_handoff.subt_handoff_preview \
+  --package /mnt/d/AeroWAM-data/external_scenes/subt_urban_pinned_v2 \
+  --models /mnt/d/AeroWAM-data/annotation_models_v1 \
+  --target blue:cube --swapped \
+  --speed 0.4 --preview-seconds 100 \
+  --output-dir "/mnt/d/AeroWAM-data/subt_stair_gui_$(date +%Y%m%d_%H%M%S)"
+```
+
+`--preview-seconds 100` 覆盖完整路线，结束摘要中的 `reached_upper_floor` 应为 `true`。这是 Gazebo GUI 中的运动学代理预览，不启动 PX4、不解锁、不发送飞控命令，也不代表真实飞行成绩。较短的 20 秒只显示起始楼层和上楼前段；目标不再沿一楼左右往返。
+
 渲染可见性顺序为“仅初始观察者可见 → 双方可见的交接窗口 → 仅接手者可见”。因果事件教师依次给出 `found → handoff_request → handoff_accept → confirm`，确认要求原观察者已经失视且接手者稳定可见，并遵守声明的消息延迟。当前双方同时可见窗口较长，尚未验证双方同时失视下的预测恢复能力。
 
 两条已保存示范分别采用红球 `uav_0 → uav_1`、蓝方块 `uav_1 → uav_0`。这说明采集器支持身份置换，不表示颜色决定角色，也不证明策略已经学会角色不变性。角色由可见性事件临时形成，不作为永久 UAV 编号分工；后续应将每种目标与两种身份置换交叉采集，避免颜色与身份混杂。

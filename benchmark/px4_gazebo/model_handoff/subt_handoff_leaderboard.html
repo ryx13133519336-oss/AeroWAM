@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AeroWAM | SubT Handoff Leaderboard</title>
+  <style>
+    :root {
+      --ink: #17212b;
+      --muted: #667483;
+      --line: #dbe2e8;
+      --panel: #ffffff;
+      --canvas: #f3f6f8;
+      --navy: #16324f;
+      --teal: #087f8c;
+      --green: #18794e;
+      --amber: #9a5b00;
+      --red: #b42318;
+      --shadow: 0 8px 22px rgba(23, 33, 43, .07);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--canvas);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: var(--canvas); }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    .topbar { background: var(--navy); color: #fff; }
+    .topbar-inner { max-width: 1440px; margin: 0 auto; padding: 22px 28px 20px; }
+    .brandline { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; }
+    .eyebrow { color: #a9c5d8; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 8px 0 6px; font-size: clamp(24px, 3vw, 34px); letter-spacing: 0; }
+    .subtitle { margin: 0; color: #d4e0e8; font-size: 14px; }
+    .topmeta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 470px; }
+    .topmeta span { border: 1px solid rgba(255,255,255,.25); border-radius: 4px; padding: 7px 9px; color: #e5eef3; font-size: 12px; white-space: nowrap; }
+    .main { max-width: 1440px; margin: 0 auto; padding: 22px 28px 40px; }
+    .notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--amber); padding: 13px 15px; margin-bottom: 18px; box-shadow: var(--shadow); }
+    .notice.ok { border-left-color: var(--green); }
+    .notice strong { font-size: 14px; }
+    .notice small { display: block; color: var(--muted); margin-top: 3px; }
+    .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .button { background: #fff; color: var(--navy); border: 1px solid #b9c6d0; border-radius: 4px; padding: 8px 11px; font-weight: 650; }
+    .button:hover, .button:focus-visible { border-color: var(--teal); color: var(--teal); outline: none; }
+    .file-input { display: none; }
+    .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .metric { background: var(--panel); border: 1px solid var(--line); padding: 16px; min-height: 92px; box-shadow: var(--shadow); }
+    .metric-label { color: var(--muted); font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; }
+    .metric-value { margin-top: 10px; font-size: 26px; font-weight: 750; }
+    .metric-value.empty { color: #9aa7b3; font-size: 18px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 14px; }
+    .field { display: grid; gap: 5px; min-width: 170px; }
+    .field label { color: var(--muted); font-size: 12px; font-weight: 650; }
+    select { border: 1px solid #b9c6d0; background: #fff; color: var(--ink); border-radius: 4px; padding: 9px 10px; }
+    .content-grid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 16px; align-items: start; }
+    .panel { background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow); }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 16px; border-bottom: 1px solid var(--line); }
+    .panel-head h2 { margin: 0; font-size: 16px; }
+    .panel-head span { color: var(--muted); font-size: 12px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 800px; }
+    th { color: var(--muted); background: #f8fafb; font-size: 11px; font-weight: 750; letter-spacing: .05em; text-align: left; text-transform: uppercase; }
+    th, td { padding: 13px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover, tbody tr.selected { background: #f0f8f9; }
+    td { font-size: 13px; }
+    .method { font-weight: 700; color: var(--navy); }
+    .method small { display: block; color: var(--muted); font-weight: 500; margin-top: 3px; }
+    .rank { width: 44px; color: var(--muted); font-size: 16px; font-weight: 750; }
+    .rank.top { color: var(--amber); }
+    .rate { font-size: 17px; font-weight: 750; }
+    .rate.empty { color: #9aa7b3; font-size: 13px; }
+    .status { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 4px 8px; font-size: 11px; font-weight: 750; white-space: nowrap; }
+    .status.good { background: #e6f4ec; color: var(--green); }
+    .status.warn { background: #fff2dc; color: var(--amber); }
+    .status.muted { background: #eef1f3; color: var(--muted); }
+    .status.bad { background: #fdebea; color: var(--red); }
+    .empty-state { padding: 44px 20px; text-align: center; color: var(--muted); }
+    .empty-state strong { display: block; color: var(--ink); margin-bottom: 8px; }
+    .side { position: sticky; top: 16px; }
+    .detail { padding: 16px; }
+    .detail h3 { margin: 0 0 4px; font-size: 18px; }
+    .detail .sub { color: var(--muted); font-size: 12px; margin-bottom: 17px; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
+    .detail-cell { background: #f8fafb; border: 1px solid var(--line); padding: 10px; }
+    .detail-cell label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 5px; }
+    .detail-cell strong { font-size: 15px; }
+    .section-title { color: var(--muted); font-size: 11px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; margin: 17px 0 8px; }
+    .checks { display: grid; gap: 7px; }
+    .check { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding-bottom: 7px; border-bottom: 1px dashed var(--line); }
+    .check span { color: var(--muted); }
+    .check b.pass { color: var(--green); }
+    .check b.fail { color: var(--red); }
+    .reason-list { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .rules { margin-top: 16px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .rules code { color: var(--navy); }
+    footer { max-width: 1440px; margin: 0 auto; padding: 0 28px 28px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 980px) {
+      .content-grid { grid-template-columns: 1fr; }
+      .side { position: static; }
+    }
+    @media (max-width: 720px) {
+      .topbar-inner, .main, footer { padding-left: 16px; padding-right: 16px; }
+      .brandline { display: block; }
+      .topmeta { justify-content: flex-start; margin-top: 16px; }
+      .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .notice { align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brandline">
+        <div>
+          <div class="eyebrow">AeroWAM Benchmark</div>
+          <h1>SubT Handoff Leaderboard</h1>
+          <p class="subtitle">双无人机协作 · 部分可观测 · 队友行为变化</p>
+        </div>
+        <div class="topmeta" aria-label="评测范围">
+          <span>任务：handoff</span><span>场景族：SubT Urban 2 Story</span><span>通信：0.5 s 固定</span>
+        </div>
+      </div>
+    </div>
+  </header>
+  <main class="main">
+    <section class="notice" id="notice">
+      <div><strong id="noticeTitle">尚未加载榜单数据</strong><small id="noticeText">选择 evaluation leaderboard JSON；没有合格闭环报告时不会显示正式排名。</small></div>
+      <div class="actions"><label class="button" for="fileInput">加载 JSON</label><input class="file-input" id="fileInput" type="file" accept="application/json,.json"><button class="button" id="reloadButton" type="button">重新读取 URL</button></div>
+    </section>
+    <section class="summary" aria-label="榜单摘要">
+      <div class="metric"><div class="metric-label">正式排名方法</div><div class="metric-value empty" id="metricMethods">尚无数据</div></div>
+      <div class="metric"><div class="metric-label">有效 episode</div><div class="metric-value empty" id="metricEpisodes">尚无数据</div></div>
+      <div class="metric"><div class="metric-label">最高成功率</div><div class="metric-value empty" id="metricBest">尚无数据</div></div>
+      <div class="metric"><div class="metric-label">总报告数</div><div class="metric-value empty" id="metricReports">尚无数据</div></div>
+    </section>
+    <section class="controls" aria-label="筛选">
+      <div class="field"><label for="splitFilter">测试分区</label><select id="splitFilter"><option value="all">全部分区</option></select></div>
+      <div class="field"><label for="statusFilter">排名状态</label><select id="statusFilter"><option value="all">全部方法</option><option value="ranked">正式排名</option><option value="audit">仅审计记录</option></select></div>
+    </section>
+    <div class="content-grid">
+      <section class="panel" aria-label="模型排名">
+        <div class="panel-head"><h2>模型排名</h2><span id="tableMeta">0 条记录</span></div>
+        <div class="table-wrap"><table><thead><tr><th>#</th><th>方法</th><th>分区</th><th>有效 episode</th><th>成功率</th><th>平均延迟</th><th>覆盖 / 状态</th></tr></thead><tbody id="rankingBody"></tbody></table></div>
+        <div class="empty-state" id="tableEmpty"><strong>尚无可显示的评测结果</strong>加载正式 evaluation leaderboard JSON 后，排名和审计记录会出现在这里。</div>
+      </section>
+      <aside class="panel side" aria-label="方法详情">
+        <div class="panel-head"><h2>方法详情</h2><span>点击排名行</span></div>
+        <div class="detail" id="detail"><div class="empty-state"><strong>未选择方法</strong>选择一行查看覆盖条件、证据旗标和不纳入排名的原因。</div></div>
+      </aside>
+    </div>
+    <div class="rules">正式排名要求：<code>closed_loop</code>、<code>public_input_only</code>、独立审计、真实 PX4/Gazebo 准入、控制轨迹核验；教师、运动学代理、规则 reference 和基础设施失败只进入审计区。</div>
+  </main>
+  <footer>数据文件应由独立评测 runner 生成；本页面只展示已保存的 leaderboard JSON，不执行模型、不运行仿真。</footer>
+  <script>
+    const state = { data: null, selected: null };
+    const $ = (id) => document.getElementById(id);
+    const urlData = new URLSearchParams(location.search).get('data');
+
+    function pct(value) { return value == null ? '—' : `${(value * 100).toFixed(1)}%`; }
+    function number(value) { return value == null ? '—' : Number(value).toLocaleString('zh-CN'); }
+    function setMetric(id, value, empty = false) { const node = $(id); node.textContent = value; node.classList.toggle('empty', empty); }
+    function statusFor(row) { return row.ranked ? ['正式排名', 'good'] : row.n_eligible ? ['覆盖不足', 'warn'] : ['仅审计', 'muted']; }
+
+    function renderNotice() {
+      const notice = $('notice');
+      if (!state.data) { notice.classList.remove('ok'); $('noticeTitle').textContent = '尚未加载榜单数据'; $('noticeText').textContent = '选择 evaluation leaderboard JSON；没有合格闭环报告时不会显示正式排名。'; return; }
+      const formal = state.data.formal_score === true;
+      notice.classList.toggle('ok', formal);
+      $('noticeTitle').textContent = formal ? '正式榜单已生成' : '当前没有正式排名';
+      $('noticeText').textContent = formal ? '排名仅包含满足闭环、独立审计和真实飞行证据的 episode。' : '当前结果不足以形成正式排名；审计记录仍可查看。';
+    }
+
+    function renderSummary(rows) {
+      const ranked = rows.filter(row => row.ranked);
+      const eligible = rows.reduce((sum, row) => sum + (row.n_eligible || 0), 0);
+      const best = ranked.length ? Math.max(...ranked.map(row => row.success_rate)) : null;
+      const reports = rows.reduce((sum, row) => sum + (row.n_reports || 0), 0);
+      setMetric('metricMethods', number(ranked.length), !state.data);
+      setMetric('metricEpisodes', number(eligible), !state.data);
+      setMetric('metricBest', pct(best), best == null);
+      setMetric('metricReports', number(reports), !state.data);
+    }
+
+    function renderFilters(rows) {
+      const select = $('splitFilter');
+      const previous = select.value;
+      const splits = [...new Set(rows.map(row => row.split))].sort();
+      select.innerHTML = '<option value="all">全部分区</option>' + splits.map(split => `<option value="${escapeHtml(split)}">${escapeHtml(split)}</option>`).join('');
+      select.value = splits.includes(previous) ? previous : 'all';
+    }
+
+    function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch])); }
+    function filteredRows() {
+      if (!state.data) return [];
+      const split = $('splitFilter').value;
+      const status = $('statusFilter').value;
+      return (state.data.all_methods || []).filter(row => (split === 'all' || row.split === split) && (status === 'all' || (status === 'ranked' ? row.ranked : !row.ranked)));
+    }
+
+    function renderTable() {
+      const rows = filteredRows();
+      $('tableMeta').textContent = `${rows.length} 条记录`;
+      $('tableEmpty').style.display = rows.length ? 'none' : 'block';
+      $('rankingBody').innerHTML = rows.map(row => {
+        const [label, tone] = statusFor(row);
+        const rank = row.rank == null ? '—' : row.rank;
+        const selected = state.selected && state.selected.method_id === row.method_id && state.selected.split === row.split;
+        return `<tr class="${selected ? 'selected' : ''}" data-method="${escapeHtml(row.method_id)}" data-split="${escapeHtml(row.split)}">
+          <td class="rank ${row.rank === 1 ? 'top' : ''}">${rank}</td>
+          <td><div class="method">${escapeHtml(row.method_id)}<small>${row.n_ineligible || 0} 条未纳入排名</small></div></td>
+          <td>${escapeHtml(row.split)}</td><td>${number(row.n_eligible)}</td><td class="rate ${row.success_rate == null ? 'empty' : ''}">${pct(row.success_rate)}</td>
+          <td>${row.mean_latency_ms == null ? '—' : `${row.mean_latency_ms.toFixed(1)} ms`}</td><td><span class="status ${tone}">${label}</span></td>
+        </tr>`;
+      }).join('');
+      document.querySelectorAll('#rankingBody tr').forEach(row => row.addEventListener('click', () => {
+        state.selected = rows.find(item => item.method_id === row.dataset.method && item.split === row.dataset.split) || null;
+        renderTable(); renderDetail();
+      }));
+    }
+
+    function check(label, value) { return `<div class="check"><span>${label}</span><b class="${value ? 'pass' : 'fail'}">${value ? '通过' : '未通过'}</b></div>`; }
+    function renderDetail() {
+      const row = state.selected;
+      if (!row) { $('detail').innerHTML = '<div class="empty-state"><strong>未选择方法</strong>选择一行查看覆盖条件、证据旗标和不纳入排名的原因。</div>'; return; }
+      const reasons = row.ineligible_reasons || [];
+      $('detail').innerHTML = `<h3>${escapeHtml(row.method_id)}</h3><div class="sub">${escapeHtml(row.split)} · ${row.ranked ? '正式排名' : '审计记录'}</div>
+        <div class="detail-grid"><div class="detail-cell"><label>成功率</label><strong>${pct(row.success_rate)}</strong></div><div class="detail-cell"><label>有效 episode</label><strong>${number(row.n_eligible)}</strong></div><div class="detail-cell"><label>平均延迟</label><strong>${row.mean_latency_ms == null ? '—' : `${row.mean_latency_ms.toFixed(1)} ms`}</strong></div><div class="detail-cell"><label>报告总数</label><strong>${number(row.n_reports)}</strong></div></div>
+        <div class="section-title">证据状态</div><div class="checks">${check('覆盖条件', row.coverage_ok)}${check('正式排名', row.ranked)}${check('独立审计 / 闭环', row.ranked || row.n_eligible > 0)}</div>
+        <div class="section-title">条件覆盖</div><div class="sub">${row.coverage && row.coverage.length ? row.coverage.map(escapeHtml).join('<br>') : '没有合格 episode'}</div>
+        ${reasons.length ? `<div class="section-title">未纳入原因</div><ul class="reason-list">${reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>` : ''}`;
+    }
+
+    function render() {
+      renderNotice();
+      const rows = state.data ? (state.data.all_methods || []) : [];
+      renderSummary(rows); renderFilters(rows); renderTable(); renderDetail();
+    }
+
+    function loadData(data) {
+      if (!data || data.schema !== 'aerowam-subt-handoff-leaderboard/1' || !Array.isArray(data.all_methods)) throw new Error('不是有效的 SubT handoff leaderboard JSON');
+      state.data = data; state.selected = null; render();
+    }
+    $('fileInput').addEventListener('change', async event => {
+      const file = event.target.files[0]; if (!file) return;
+      try { loadData(JSON.parse(await file.text())); } catch (error) { alert(error.message); }
+    });
+    $('reloadButton').addEventListener('click', () => { if (urlData) loadUrl(urlData); else render(); });
+    $('splitFilter').addEventListener('change', renderTable);
+    $('statusFilter').addEventListener('change', renderTable);
+    async function loadUrl(url) { try { const response = await fetch(url); if (!response.ok) throw new Error(`HTTP ${response.status}`); loadData(await response.json()); } catch (error) { $('noticeText').textContent = `URL 数据加载失败：${error.message}。可直接选择本地 JSON。`; } }
+    render(); if (urlData) loadUrl(urlData);
+  </script>
+</body>
+</html>

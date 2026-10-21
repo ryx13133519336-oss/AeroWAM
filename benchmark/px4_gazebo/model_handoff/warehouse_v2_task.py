@@ -135,11 +135,14 @@ def _instruction() -> str:
 
 
 def _teammate_messages(profile: str, index: int, timestamp_ns: int,
-                       visible: tuple[bool, bool], y: float, rng: random.Random) -> list[MessageRecord]:
+                       visible_by_agent: Mapping[str, bool], y: float,
+                       rng: random.Random) -> list[MessageRecord]:
     """Generate public teammate behavior; latent profile remains private."""
-    receiver_visible = visible[1]
-    if not receiver_visible:
+    visible_agents = [agent for agent in AGENTS if visible_by_agent[agent]]
+    if len(visible_agents) != 1:
         return []
+    sender = visible_agents[0]
+    receiver = next(agent for agent in AGENTS if agent != sender)
     if profile == "delayed_relay" and index < 2:
         return []
     if profile == "missing_relay" and index % 9 in (0, 1, 2):
@@ -150,10 +153,11 @@ def _teammate_messages(profile: str, index: int, timestamp_ns: int,
         payload = {"event": "track", "confidence": 0.42, "bearing_y": round(y + 0.55, 3)}
     else:
         payload = {"event": "track", "confidence": 0.91, "bearing_y": round(y + rng.uniform(-0.04, 0.04), 3)}
-    return [MessageRecord(timestamp_ns, "uav_1", "uav_0", payload)]
+    return [MessageRecord(timestamp_ns, sender, receiver, payload)]
 
 
-def _truth_target(index: int, family: str, layout: str, branch: int) -> dict[str, Any]:
+def _truth_target(index: int, family: str, layout: str, branch: int,
+                  agent_order: tuple[str, str]) -> dict[str, Any]:
     t = index * DT_S
     y, velocity = _motion(t, family, branch)
     visible = _visibility(y, layout)
@@ -164,11 +168,11 @@ def _truth_target(index: int, family: str, layout: str, branch: int) -> dict[str
         horizons[str(horizon)] = {
             "position_enu": [2.4, future_y, 1.4],
             "velocity_enu": [0.0, future_v, 0.0],
-            "visible_by_agent": {AGENTS[0]: future_visible[0], AGENTS[1]: future_visible[1]},
+            "visible_by_agent": {agent_order[i]: future_visible[i] for i in range(2)},
         }
     result = {
         "position_enu": [2.4, y, 1.4], "velocity_enu": [0.0, velocity, 0.0],
-        "visible_by_agent": {AGENTS[0]: visible[0], AGENTS[1]: visible[1]},
+        "visible_by_agent": {agent_order[i]: visible[i] for i in range(2)},
         "occluded": not any(visible), "horizons": horizons,
     }
     if family == "distractor":
@@ -186,6 +190,7 @@ def generate_episode(seed: int, split: str = "seen", *, with_supervision: bool =
         raise ValueError(f"unknown split: {split}")
     layout, motion, teammate = SPLIT_MATRIX[split]
     rng = random.Random(seed)
+    agent_order = AGENTS if rng.random() < 0.5 else tuple(reversed(AGENTS))
     branch = 1 if rng.random() >= 0.5 else -1
     episode_id = f"warehouse_v2_{split}_{seed:08d}"
     observations: list[PublicObservation] = []
@@ -196,15 +201,15 @@ def generate_episode(seed: int, split: str = "seen", *, with_supervision: bool =
     seen_messages: dict[str, list[dict[str, Any]]] = {agent: [] for agent in AGENTS}
     for index in range(SAMPLES):
         stamp = round(index * DT_S * 1e9)
-        truth = _truth_target(index, motion, layout, branch)
+        truth = _truth_target(index, motion, layout, branch, agent_order)
         y = truth["position_enu"][1]
-        visible = tuple(truth["visible_by_agent"][agent] for agent in AGENTS)
-        current_messages = _teammate_messages(teammate, index, stamp, visible, y, rng)
+        visible = tuple(truth["visible_by_agent"][agent] for agent in agent_order)
+        current_messages = _teammate_messages(teammate, index, stamp, truth["visible_by_agent"], y, rng)
         messages.extend(current_messages)
         for message in current_messages:
             seen_messages[message.receiver].append(message.to_dict())
         agents = {}
-        for agent_index, agent in enumerate(AGENTS):
+        for agent_index, agent in enumerate(agent_order):
             own_visible = visible[agent_index]
             noise = rng.uniform(-0.04, 0.04) if own_visible else None
             agents[agent] = {
@@ -225,14 +230,15 @@ def generate_episode(seed: int, split: str = "seen", *, with_supervision: bool =
         if with_supervision:
             supervision.append(TaskSupervision(index, "uav_0", f"{TASK_ID}.predict", source="expert"))
             supervision.append(TaskSupervision(index, "uav_1", f"{TASK_ID}.predict", source="expert"))
-            if visible[0] and not visible[1]:
-                supervision.append(TaskSupervision(index, "uav_0", f"{TASK_ID}.request", source="expert"))
-            elif visible[1] and not visible[0]:
-                supervision.append(TaskSupervision(index, "uav_1", f"{TASK_ID}.confirm", source="expert"))
+            visible_agents = [agent for agent in AGENTS if truth["visible_by_agent"][agent]]
+            if len(visible_agents) == 1:
+                source = next(agent for agent in AGENTS if agent not in visible_agents)
+                supervision.append(TaskSupervision(index, source, f"{TASK_ID}.request", source="expert"))
+                supervision.append(TaskSupervision(index, visible_agents[0], f"{TASK_ID}.confirm", source="expert"))
             elif not any(visible):
-                supervision.append(TaskSupervision(index, "uav_0", f"{TASK_ID}.wait", source="expert"))
+                supervision.append(TaskSupervision(index, AGENTS[index % 2], f"{TASK_ID}.wait", source="expert"))
         if index < SAMPLES - 1:
-            next_truth = _truth_target(index + 1, motion, layout, branch)
+            next_truth = _truth_target(index + 1, motion, layout, branch, agent_order)
             futures.append(FutureObservationTarget(
                 index, index + 1, DT_S,
                 {"horizons": truth["horizons"], "next_visibility": next_truth["visible_by_agent"]},
@@ -315,6 +321,7 @@ def score_predictions(record: EpisodeRecord, truth: Mapping[str, Any], predictio
     truth_rows = {int(row["sample_index"]): row for row in truth["rows"]}
     nll, brier, confidences, labels = [], [], [], []
     unsafe, requests, confirms, successful = 0, 0, 0, False
+    pending_receivers: set[str] = set()
     for index, target in enumerate(record.future_observation_supervision):
         row = rows.get(target.sample_index)
         actual = truth_rows.get(target.sample_index)
@@ -335,16 +342,21 @@ def score_predictions(record: EpisodeRecord, truth: Mapping[str, Any], predictio
                 labels.append(label == (probability >= 0.5))
         action = row.get("action", {})
         event = action.get("event")
+        actor = action.get("agent_id")
         if event == "request":
             requests += 1
             # A request is grounded only when the source is occluded and the
             # teammate has independent visibility to add evidence.
-            if actual["visible_by_agent"][AGENTS[0]] or not actual["visible_by_agent"][AGENTS[1]]:
+            peer = next((agent for agent in AGENTS if agent != actor), None)
+            if actor not in AGENTS or actual["visible_by_agent"][actor] or not actual["visible_by_agent"][peer]:
                 unsafe += 1
+            else:
+                pending_receivers.add(peer)
         elif event == "confirm":
             confirms += 1
-            if actual["visible_by_agent"][AGENTS[1]] and requests:
+            if actor in pending_receivers and actual["visible_by_agent"][actor]:
                 successful = True
+                pending_receivers.remove(actor)
     return {
         "schema": "aerowam-warehouse-v2-score/1", "episode_id": record.episode_id,
         "prediction_samples": len(nll) // len(HORIZONS_S) if nll else 0,

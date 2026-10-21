@@ -169,3 +169,9 @@ cd /mnt/d/AeroWAM
 ## 当前研究推进边界
 
 8 格只补齐部分可观测跨层 handoff 的基础条件，normal/delayed 仅代表两种预设队友运动。需要在训练前固定新任务和场景留出，补充失视后恢复及未见队友行为，再比较无协作/无预测基线、仅协作技能、仅预测模块、协作技能与预测组合的适当对照。当前事件分类与下一观察 Ridge 尚未形成组合决策闭环，不能证明组合迁移。下行方向反转只作初步方向留出。现阶段不继续用 2 s episode 训练当前固定通信实验；历史轻量基线保留但不作为本阶段结果。
+
+## 最新 SubT PX4 只读证据（2026-10-21）
+
+`/mnt/d/AeroWAM-data/subt_startup_control_20261021_195001` 已通过 `subt_urban startup --control-link-check`：`startup_passed=true`、`control_link_verified=true`，双机 status/odometry 与相机配对正常，两个机体均有新鲜 `command=400`、`result=0` 未解锁 disarm ACK。该检查只证明六个控制 writer 的发现和未解锁命令 round-trip；`motion_commands_sent=0`、`flight_ready=false`、`setpoint_execution_verified=false`、`flight_admitted=false`，没有 PX4 飞行或模型任务成绩。
+
+对应 `px4_0.log`/`px4_1.log` 的预检原因是 `no heading reference` 和 `No connection to the GCS`。不得通过关闭预检、放宽门限或修改时钟绕过；真实动作接入前仍需合法定位/航向来源、SubT 机体净空与接触监测、逐机动作 trace 和独立审计。该证据不能写入正式榜单。

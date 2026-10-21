@@ -35,6 +35,8 @@
 
 新增 `subt_handoff_checkpoint_server.py` 和 `subt_handoff_checkpoint_adapter.py`：Windows 端加载冻结 sklearn checkpoint，WSL 端通过 core 长度前缀协议请求。适配器重建训练时的公共 419 维特征，仅记录事件概率，输出零动作且不伪造 bbox；这是模型权重进入实时请求链的诊断入口。2026-10-21 已完成一次跨 Windows/WSL 的 5 秒 Gazebo 代理 smoke：`D:\AeroWAM-data\subt_proxy_checkpoint_20261021_192240`，`model_action_services_accepted=11`、`samples=11`、进程清理无误；独立 `subt_handoff_proxy_audit.py` 通过（`frames_verified=11`、`model_actions_traced=11`）。这证明冻结权重进入实时 Core 请求链，不证明 handoff 成功、世界模型能力或 PX4 飞行。
 
+同日按相同固定 checkpoint 重跑的审计目录为 `D:\AeroWAM-data\subt_proxy_checkpoint_20261021_200300`（WSL：`/mnt/d/AeroWAM-data/subt_proxy_checkpoint_20261021_200300`）。独立审计通过，`run_id=subt-proxy-ee667a8486f04c568e7df12913ce043f`、`frames_verified=11`、`model_actions_traced=11`、`summary_sha256=7ea609350b4ca1f9c0ee8af9e6ea9d33b67c4ad1c418163afd9bfe6a25253839`。结果仍为 `proxy_event_success=false`、`kinematic_proxy=true`、`flight_admitted=false`、`formal_score=false`；这是重复的接口/审计证据，不是新的模型成功率或独立任务重复。
+
 私有初始相机摆放仍使用教师计划；目前是集中式双机控制，尚无 normal/delayed 独立队友策略；不是专家采集替代品，也不能据此评测世界模型真实飞行动力学。`proxy_summary.json` 的 success 固定 null；审计可单独给出 `proxy_event_success`，不会进入正式榜单。
 
 命令见 [SUBT_NEXT_RUN_CN.md](SUBT_NEXT_RUN_CN.md)。长时运行由用户执行，助手不占用 Gazebo 等待。

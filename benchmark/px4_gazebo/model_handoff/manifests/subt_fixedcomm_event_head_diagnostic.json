@@ -1,0 +1,12 @@
+{
+  "schema": "aerowam-subt-diagnostic-method/1",
+  "method_id": "subt_fixedcomm_shared_event_head_v1",
+  "method_kind": "repository_model",
+  "factory": "benchmark.px4_gazebo.model_handoff.subt_handoff_checkpoint_adapter:create_policy",
+  "interface": "aerowam-model-input/1 -> aerowam-model-output/1",
+  "checkpoint": "D:/AeroWAM-data/subt_fixedcomm_shared_event_20261021_161727",
+  "policy": "frozen shared self/peer event head; hold actions; no grounded events",
+  "world_model": "loaded checkpoint Ridge is observation-only and not emitted as action-conditioned dynamics",
+  "formal_score_eligible": false,
+  "purpose": "real-time protocol and frozen-checkpoint ingestion diagnostic only"
+}

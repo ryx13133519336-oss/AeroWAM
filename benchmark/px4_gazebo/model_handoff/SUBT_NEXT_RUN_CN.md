@@ -73,6 +73,34 @@ proxy_run_dir="/mnt/d/AeroWAM-data/subt_proxy_hold_$(date +%Y%m%d_%H%M%S)"
 
 使用已适配模型时改 adapter 和 manifest，或把 adapter 换为 --policy-endpoint HOST:PORT。服务端必须接受 core 协议；旧单 intent 的 ModelJointAction 需要显式适配，不能固定 uav_0/uav_1 为 source/receiver。
 
+## 3a. 冻结事件头的跨 Windows/WSL 协议 smoke
+
+训练 checkpoint 使用 Windows scikit-learn，Gazebo 使用 WSL Python；不要在 WSL 直接加载该 joblib。先开一个 **Windows PowerShell** 窗口并保持服务运行：
+
+```powershell
+Set-Location D:\AeroWAM
+python -B -u -m benchmark.px4_gazebo.model_handoff.subt_handoff_checkpoint_server `
+  --checkpoint D:\AeroWAM-data\subt_fixedcomm_shared_event_20261021_161727 `
+  --host 0.0.0.0 --port 8765
+```
+
+再开一个 **WSL Bash** 窗口，确认没有其他 Gazebo 任务后运行：
+
+```bash
+cd /mnt/d/AeroWAM
+proxy_run_dir="/mnt/d/AeroWAM-data/subt_proxy_checkpoint_$(date +%Y%m%d_%H%M%S)"
+/usr/bin/python3 -B -u -m benchmark.px4_gazebo.model_handoff.subt_handoff_proxy \
+  --package /mnt/d/AeroWAM-data/external_scenes/subt_urban_pinned_v2 \
+  --models /mnt/d/AeroWAM-data/annotation_models_v1 \
+  --model-manifest benchmark/px4_gazebo/model_handoff/manifests/subt_fixedcomm_event_head_diagnostic.json \
+  --policy-endpoint 127.0.0.1:8765 \
+  --seconds 5 --wall-timeout-s 300 --output "$proxy_run_dir"
+/usr/bin/python3 -B -m benchmark.px4_gazebo.model_handoff.subt_handoff_proxy_audit \
+  --run-dir "$proxy_run_dir" --output "${proxy_run_dir}.audit.json"
+```
+
+预期是 `status=complete`、动作服务请求全部成功、独立审计通过、`proxy_event_success=false`。这条测试证明冻结 checkpoint 已进入实时请求链；适配器只输出 hold 动作并对无框事件 abstain，不能证明 handoff 成功或世界模型有效。若 WSL 无法连接 `127.0.0.1:8765`，停止代理并把连接错误发来，不要改成任意公网地址。
+
 ## 4. 开发集 8 格全部通过后训练探索性基线
 
 以下在 Windows PowerShell 运行，使用已确认安装 scikit-learn 的 Windows Python。--train-root 会重新独立核验数据、为每格选择一条通过的 episode；不足 8 格就报错，不训练。测试使用独立目录的红球下行 episode，不加入训练，也不作为 checkpoint 选择依据。
@@ -114,7 +142,7 @@ if ($LASTEXITCODE -eq 0) {
 }
 ```
 
-采集端已出现蓝方块 RGB 颜色审计失败；同一 JPEG 在 Windows Pillow 12/libjpeg 9 和 WSL libjpeg 6.2 的解码会改变阈值边缘的颜色支持计数。保留 `batch_audit_error.txt` 的失败目录不计入覆盖，不能换平台补写 passed 来绕过。新报错包含帧号、agent、支持像素、阈值和 JPEG 版本，便于定位；审计阈值保持不变。全矩阵评估尚待用户采集通过后运行，不能把单元测试通过写成实测通过。
+采集端曾出现蓝方块 RGB 颜色审计失败；同一 JPEG 在 Windows Pillow 12/libjpeg 9 和 WSL libjpeg 6.2 的解码会改变阈值边缘的颜色支持计数。保留 `batch_audit_error.txt` 的失败目录不计入覆盖，不能换平台补写 passed 来绕过。新报错包含帧号、agent、支持像素、阈值和 JPEG 版本，便于定位；审计阈值保持不变。当前 8 格留出评估已经在真实审计数据上完成，不能把代理或离线指标写成闭环任务成功率。
 
 ## 后续顺序
 

@@ -102,7 +102,7 @@ source /home/ryx/px4_ros2_ws/install/setup.bash
 
 可加 `--gui`。独立 Gazebo 分区、新 ROS 域、临时 Agent 端口、新 PX4 工作目录；不发布起飞、解锁或轨迹指令。只清理本次进程。启动成功只说明相机和遥测就绪，不说明预检或飞行通过。没有改 WSL 校时链路，也没有放宽 10 ms 飞行时钟门槛或 400 ms 推理预算。
 
-## 已保存的实测证据（2026-10-20）
+## 已保存的实测证据（截至 2026-10-21）
 
 | 检查 | 结果 | 本机数据目录 |
 | --- | --- | --- |
@@ -111,6 +111,7 @@ source /home/ryx/px4_ros2_ws/install/setup.bash
 | 墙体遮挡 / 重新可见 | 红蓝目标在两路中分别隐藏 / 有效可见；117,517 个碰撞三角形参与私有射线检查 | 同上 `inspection.json` |
 | GUI + 双实体无人机 | 两次 18 秒有界启动正常，GUI 插件和两机系统加载；未接飞控，v2 保留 GUI 日志 | `/mnt/d/AeroWAM-data/subt_urban_gui_smoke_v2` |
 | 独立 PX4 双机只读启动 | 通过，两机均未解锁，运动指令 0 | `/mnt/d/AeroWAM-data/subt_urban_disarmed_v1` |
+| SubT 楼梯资源上的 PX4 双机只读启动复核 | `startup_passed=true`，`flight_ready=false`，运动指令 0；`uav_0/uav_1` 各 8 个相机配对，odometry 75/74 条，status 各 2 条，清理正常 | `/mnt/d/AeroWAM-data/subt_startup_20261021_193713` |
 
 最后一项两路 RGB/实例图各 8 对；status 各 2 条，odometry 为 61/60 条；无错误且本次进程全部退出。两机预检未通过，**不可由此推导飞行放行**。
 

@@ -132,7 +132,19 @@ def visibility_stages(rows, owner):
     return {"passed":len(selected)==3,"stages":stages,"selected":selected}
 
 
-def collect(package,models,output,*,component,speed=.3,swapped=False,teammate="normal",reverse=False,timeout=720.):
+def resolve_message_delay(teammate, message_delay_s=None):
+    """Explicit communication is independent of motion; None preserves old runs."""
+    if teammate not in {"normal", "delayed"}:
+        raise ValueError("Declared teammate motion required")
+    delay = (2. if teammate == "delayed" else .5) if message_delay_s is None else message_delay_s
+    if isinstance(delay, bool) or not math.isfinite(delay) or not 0 <= delay <= 10:
+        raise ValueError("Finite message delay in 0..10 seconds required")
+    return float(delay)
+
+
+def collect(package,models,output,*,component,speed=.3,swapped=False,teammate="normal",reverse=False,
+            timeout=720.,message_delay_s=None):
+    delay_s=resolve_message_delay(teammate,message_delay_s)
     if not math.isfinite(timeout) or not 30<=timeout<=1800:
         raise ValueError("Finite bounded wall timeout 30..1800 required")
     total_start=time.monotonic()
@@ -149,7 +161,8 @@ def collect(package,models,output,*,component,speed=.3,swapped=False,teammate="n
              "geometry":geometry,"expert_audit":expert_audit,"cleanup_errors":[]}
     summary['condition_private']={'target':{'color':component.color,'shape':component.shape},
         'speed_m_s':speed,'swapped':swapped,'teammate':teammate,'reverse':reverse,
-        'message_delay_s':2. if teammate=='delayed' else .5}
+        'message_delay_s':delay_s,
+        'message_delay_selection':'legacy_motion_default' if message_delay_s is None else 'explicit_independent'}
     summary['source_sha256']={name:sha256(Path(__file__).with_name(name)) for name in
         ('subt_handoff_collect.py','subt_handoff_expert.py','subt_handoff_route.py')}
     write_json(output/"route.private.json",route)
@@ -178,7 +191,7 @@ def collect(package,models,output,*,component,speed=.3,swapped=False,teammate="n
     labels=[]
     messages=[]
     origin=None
-    expert=EventExpert(2. if teammate=="delayed" else .5)
+    expert=EventExpert(delay_s)
     for folder in ("public/images","supervision","private"):
         (output/folder).mkdir(parents=True)
     metadata={"schema":summary["schema"],"instruction":f"Track the {component.color} {component.shape} across floors; hand off the same target and confirm after your teammate loses sight.",
@@ -364,10 +377,13 @@ def main():
     parser.add_argument("--swapped",action="store_true")
     parser.add_argument("--reverse",action="store_true")
     parser.add_argument("--teammate",choices=("normal","delayed"),default="normal")
+    parser.add_argument("--message-delay-s",type=float,
+                        help="independent communication delay 0..10 s; unset preserves legacy motion-dependent defaults")
     parser.add_argument("--timeout",type=float,default=720.)
     args=parser.parse_args()
     result=collect(args.package,args.models,args.output_dir,component=args.target,speed=args.speed,
-                   swapped=args.swapped,teammate=args.teammate,reverse=args.reverse,timeout=args.timeout)
+                   swapped=args.swapped,teammate=args.teammate,reverse=args.reverse,timeout=args.timeout,
+                   message_delay_s=args.message_delay_s)
     print(json.dumps({k:v for k,v in result.items() if k not in {"geometry","expert_audit","rendered_visibility"}}),flush=True)
     raise SystemExit(0 if result["dataset_admitted"] else 2)
 

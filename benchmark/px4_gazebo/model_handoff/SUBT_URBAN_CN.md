@@ -177,7 +177,17 @@ source /home/ryx/px4_ros2_ws/install/setup.bash
   --output-dir "/mnt/d/AeroWAM-data/subt_stair_blue_$(date +%Y%m%d_%H%M%S)"
 ```
 
-`--speed` 默认 0.3 m/s、上限 0.4 m/s；`--teammate delayed` 改变接手者到达轨迹，并将消息延迟从 0.5 s 改为 2 s，属于联合变化条件，不能据此分别归因轨迹或通信的影响。`--reverse` 仅是候选反向路线参数，不表示反向采集已通过。所有候选条件都必须重新通过几何、渲染和因果审计。
+`--speed` 默认 0.3 m/s、上限 0.4 m/s。队友轨迹变化用 `--teammate delayed` 表示；通信延迟现在有独立的 `--message-delay-s 0.5|2` 参数，可以在任意轨迹条件下交叉设置。例如，仅改轨迹而保持通信：
+
+```bash
+/usr/bin/python3 -B -m benchmark.px4_gazebo.model_handoff.subt_handoff_collect \
+  --package /mnt/d/AeroWAM-data/external_scenes/subt_urban_pinned_v2 \
+  --models /mnt/d/AeroWAM-data/annotation_models_v1 \
+  --target blue:cube --swapped --teammate delayed --message-delay-s 0.5 \
+  --output-dir /mnt/d/AeroWAM-data/subt_stair_blue_motion_only_v1
+```
+
+显式给出 `--message-delay-s` 时，队友轨迹和通信分别受控；省略该参数仍兼容旧行为（normal=0.5 s，delayed=2 s），报告会标记它是旧式联合默认值。固定种子、按整 episode 随机化的 2×2×2×2 发展采集计划可用 `subt_handoff_design --output ...json` 生成；清单本身不会启动 Gazebo。计划单元是整条 episode，不是连续帧；每格一条只用于覆盖条件，不构成独立重复或显著性证据。目标颜色/形状也仍然绑定。`--reverse` 仅是候选反向路线参数，不表示反向采集已通过。所有候选条件都必须重新通过几何、渲染和因果审计。
 
 独立审计默认写出 `inspection.json` 和拼图；重复检查现有采集目录时加 `--read-only`，保证不改写任何采集文件。旧红色数据缺少条件元数据，审计需显式指定目标和消息延迟：
 
@@ -204,6 +214,8 @@ source /home/ryx/px4_ros2_ws/install/setup.bash
 ```
 
 本机此目录已生成，包含 472 个联合样本、944 张图、470 个下一观察对，不应重复覆盖。`inputs.jsonl` 只含 `instruction / rgb / proprioception / messages / dt_s`；公开 RGB 单独复制到 `images/`。`event_supervision.jsonl` 和 `future_observation_supervision.jsonl` 是训练监督，不是策略当前输入。目标位置、实例掩码、私有可见性、路线进度、未来帧和当前教师标签均不进入公开输入；`design.json` 仅作离线溯源，包含私有文件的摘要，不是模型特征。
+
+2026-10-21 的两条新蓝色身份置换示范分别为 `subt_stair_blue_swapped_motion_only_v1`（轨迹 delayed，消息 0.5 s）与 `subt_stair_blue_swapped_comm_only_v1`（轨迹 normal，消息 2 s）。均为 236 个双视角样本、472 张 RGB、10 m 跨层跨度；独立审计重放事件成功，位姿请求分别核验 2358 / 2361 条。这是采集条件和审计器的可用性证据，不是模型效果。旧红色示范仍属无条件元数据的 legacy；已审计蓝色基线是 normal/0.5 s，仍未组成平衡完整矩阵。新审计器允许有效检测框边界处只有 1–3 个目标色素的遮挡掩码按原 15% 色彩比例通过；可见性仍由原严格实例框门槛控制。
 
 当前数据只支持特权教师下的联合事件模仿与下一观察预测开发：相机朝向依赖隐藏目标位置，双视角输入不是已验证的分散式策略；相机姿态来自理想代理而非 PX4 遥测。期望下一观察位姿不是已执行飞控动作，因此导出不提供运动控制监督，也不能宣称建立动作条件世界模型。
 

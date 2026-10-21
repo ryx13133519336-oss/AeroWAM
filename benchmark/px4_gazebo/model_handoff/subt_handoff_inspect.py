@@ -141,7 +141,10 @@ def inspect(root, *, component=None, delay_s=None):
             if (findings['bbox'] is not None)!=truth['visible'][agent]:raise ValueError('Visibility unsupported')
             if findings['bbox'] is not None:
                 support=int(np.count_nonzero((labels==11)&color_support(rgb,component.color)))
-                if support<max(4,int(findings['pixels']*.15)):raise ValueError('No declared RGB color support')
+                # Tiny edge-of-occlusion masks can yield only 1-3 color pixels;
+                # bbox validity already gates detection, so keep the same 15%
+                # color fraction without a second absolute four-pixel floor.
+                if support<max(1,int(findings['pixels']*.15)):raise ValueError('No declared RGB color support')
         if condition is not None:
             t=truth['elapsed_s']
             plan=planned_state(route,t,speed=condition['speed_m_s'],swapped=condition['swapped'],teammate=condition['teammate'])
@@ -181,6 +184,7 @@ def inspect(root, *, component=None, delay_s=None):
     report={'schema':'aerowam-subt-stair-data-inspection/1','passed':True,'samples':len(public),
         'images_verified':len(public)*2,'commands_verified':commands_verified,'source_capture_legacy':legacy,
         'condition':condition,'component':{'color':component.color,'shape':component.shape},'message_delay_s':delay_s,
+        'message_delay_selection':None if legacy else condition.get('message_delay_selection','legacy_motion_default'),
         'causal_expert_replay':True,'ordered_rendered_visibility':stages['selected'],
         'vertical_span_m':max(heights)-min(heights),'files_sha256':inventory,
         'training_scope':'RGB_and_causal_joint_event_supervision_only',

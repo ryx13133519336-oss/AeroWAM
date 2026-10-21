@@ -6,6 +6,8 @@ state. All sources stay development-training-only, in one scene-family group.
 """
 
 import argparse
+from collections import Counter
+import itertools
 import json
 from pathlib import Path
 import shutil
@@ -14,6 +16,26 @@ from .subt_handoff_inspect import inspect, read_rows, safe_image
 from .industrial_targets import parse_component
 from .subt_handoff_route import AGENTS
 from .warehouse_scene import sha256
+
+
+def condition_coverage(reports):
+    """Offline provenance only; frames are not independent condition replicates."""
+    counts=Counter()
+    unresolved=0
+    for report in reports:
+        condition=report.get('condition')
+        if condition is None:
+            unresolved+=1
+            continue
+        target=condition['target']['color']+':'+condition['target']['shape']
+        counts[(target,condition['swapped'],condition['teammate'],condition['message_delay_s'])]+=1
+    expected=set(itertools.product(('red:sphere','blue:cube'),(False,True),('normal','delayed'),(.5,2.)))
+    return {'unit':'episode_not_frame','recorded_condition_episodes':sum(counts.values()),
+            'unresolved_legacy_episodes':unresolved,
+            'counts':[{'target':key[0],'swapped':key[1],'teammate':key[2],
+                       'message_delay_s':key[3],'episodes':count} for key,count in sorted(counts.items())],
+            'complete_2x2x2x2_coverage':expected.issubset(counts),
+            'coverage_is_not_independent_replication_or_model_performance':True}
 
 
 def learning_rows(public, labels, instruction, group, image_paths):
@@ -58,7 +80,7 @@ def export(episodes,output):
         component=parse_component(frozen['component']['color']+':'+frozen['component']['shape'])
         current=inspect(episode,component=component,delay_s=frozen['message_delay_s'])
         if current['files_sha256']!=frozen['files_sha256']:raise ValueError('Capture changed since independent inspection')
-        prepared.append((episode,frozen,read_rows(episode/'public/observations.jsonl'),
+        prepared.append((episode,current,read_rows(episode/'public/observations.jsonl'),
                          read_rows(episode/'supervision/labels.jsonl'),
                          json.loads((episode/'public/metadata.json').read_text(encoding='utf8'))))
     output=Path(output)
@@ -87,6 +109,7 @@ def export(episodes,output):
             'inspection_sha256':sha256(episode/'inspection.json'),
             'inspection_files_sha256':report['files_sha256'],
             'samples':len(public),'legacy_capture':report['source_capture_legacy'],
+            'condition_private':report['condition'],
             'limitations':report['limitations']})
     tables={'inputs.jsonl':all_inputs,'event_supervision.jsonl':all_targets,
             'future_observation_supervision.jsonl':all_futures,'groups.jsonl':all_groups}
@@ -97,6 +120,7 @@ def export(episodes,output):
         'split':'development_training_only','scene_families':1,'parent_episodes':len(episodes),
         'samples':len(all_inputs),'images':len(image_hashes),'prediction_pairs':len(all_futures),
         'role_assignment':None,'sources':sources,
+        'condition_coverage':condition_coverage([item[1] for item in prepared]),
         'input_features':['instruction','rgb','proprioception','messages','dt_s'],
         'excluded_from_inputs':['target_pose','instance_masks','route_progress','private_visibility','future_frames','current_labels'],
         'BC_scope':'joint_event_prediction_with_privileged_teacher_not_decentralized_policy',
@@ -105,7 +129,8 @@ def export(episodes,output):
         'test_partition_created':False,'compositional_transfer_established':False,
         'independence':'frames_and_color_or_id_variants_of_one_scene_are_not_independent_scene_replicates',
         'limitations':['oracle_look_at_uses_hidden_target','no_action_conditioned_counterfactual_branches',
-            'no_actual_PX4_trajectory','no_independent_test_scene','no_teammate_variation_claim_from_normal_only'],
+            'no_actual_PX4_trajectory','no_independent_test_scene',
+            'no_learned_teammate_adaptation_or_transfer_evaluation'],
         'files_sha256':{name:sha256(output/name) for name in tables},'image_sha256':image_hashes}
     (output/'design.json').write_text(json.dumps(design,indent=2,allow_nan=False),encoding='utf8')
     result={'samples':len(all_inputs),'images':len(image_hashes),'prediction_pairs':len(all_futures),

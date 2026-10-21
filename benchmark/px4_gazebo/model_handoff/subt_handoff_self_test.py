@@ -8,10 +8,11 @@ from unittest.mock import patch
 
 import numpy as np
 
-from .subt_handoff_collect import poses_for, visibility_stages
+from .subt_handoff_collect import poses_for, visibility_stages, resolve_message_delay
+from .subt_handoff_design import design
 from .subt_handoff_expert import EventExpert, duration, minimum_segment_separation, planned_state
 from .subt_handoff_route import resample, sample, surface_height, AGENTS
-from .subt_handoff_data import learning_rows
+from .subt_handoff_data import learning_rows, condition_coverage
 from . import subt_handoff_inspect as inspection
 
 
@@ -57,6 +58,30 @@ class StairTests(unittest.TestCase):
         self.assertEqual(first["target_enu"],other["target_enu"])
         self.assertEqual(first["camera_poses_enu"]["uav_0"],other["camera_poses_enu"]["uav_0"])
         self.assertNotEqual(first["camera_poses_enu"]["uav_1"],other["camera_poses_enu"]["uav_1"])
+
+    def test_communication_delay_independent_of_motion_with_legacy_defaults(self):
+        self.assertEqual(resolve_message_delay("normal"),.5)
+        self.assertEqual(resolve_message_delay("delayed"),2.)
+        for delay in (0.,.5,2.,10.):
+            self.assertEqual(resolve_message_delay("normal",delay),delay)
+            self.assertEqual(resolve_message_delay("delayed",delay),delay)
+        for value in (-1.,10.1,float("nan"),float("inf"),True):
+            with self.assertRaises(ValueError):resolve_message_delay("normal",value)
+
+    def test_factorial_plan_crosses_identity_target_motion_and_communication(self):
+        plan=design()
+        self.assertEqual(plan,design())
+        self.assertNotEqual(plan["conditions"],design(7)["conditions"])
+        rows=plan["conditions"]
+        self.assertEqual(len(rows),16)
+        self.assertEqual(len({r["condition_id"] for r in rows}),16)
+        for target in ("red:sphere","blue:cube"):
+            for swapped in (False,True):
+                subset=[r for r in rows if r["target"]==target and r["swapped"]==swapped]
+                self.assertEqual({(r["teammate"],r["message_delay_s"]) for r in subset},
+                                 {("normal",.5),("normal",2.),("delayed",.5),("delayed",2.)})
+        self.assertIsNone(plan["role_assignment"])
+        self.assertFalse(plan["test_partition_created"])
 
     def test_continuous_separation_detects_between_endpoint_crossing(self):
         self.assertAlmostEqual(minimum_segment_separation([2,0,0],[-2,0,0]),0.)
@@ -113,6 +138,25 @@ class StairTests(unittest.TestCase):
 
 
 class ExportTests(unittest.TestCase):
+    def test_condition_coverage_counts_episodes_and_does_not_infer_legacy_conditions(self):
+        reports=[{'condition':None}]
+        first=condition_coverage(reports)
+        self.assertEqual(first['unresolved_legacy_episodes'],1)
+        self.assertFalse(first['complete_2x2x2x2_coverage'])
+        for row in design()['conditions']:
+            color,shape=row['target'].split(':')
+            reports.append({'condition':{'target':{'color':color,'shape':shape},
+                'swapped':row['swapped'],'teammate':row['teammate'],
+                'message_delay_s':row['message_delay_s']}})
+        final=condition_coverage(reports)
+        self.assertTrue(final['complete_2x2x2x2_coverage'])
+        self.assertEqual(final['recorded_condition_episodes'],16)
+        self.assertEqual(len(final['counts']),16)
+        self.assertTrue(all(row['episodes']==1 for row in final['counts']))
+        duplicate=condition_coverage(reports+[reports[-1]])
+        self.assertEqual(duplicate['recorded_condition_episodes'],17)
+        self.assertEqual(len(duplicate['counts']),16)
+
     def examples(self):
         public=[{'sample_index':i,'stamp_ns':1_000_000_000+i*500_000_000,
                  'dt_s':None if i==0 else .5,'proprioception':{},'messages':[],
@@ -173,6 +217,17 @@ class ExportTests(unittest.TestCase):
         read.assert_not_called()
         write.assert_not_called()
         self.assertIn('true',output.getvalue())
+
+    def test_color_support_fraction_handles_valid_one_to_three_pixel_mask(self):
+        # A valid bbox can contain a few target pixels at the occlusion edge.
+        # Color support is fractional; visibility still uses the stricter bbox gate.
+        from .subt_handoff_inspect import color_support
+        rgb=np.zeros((1,3,3),dtype=np.uint8)
+        rgb[0,:,2]=100
+        labels=np.full((1,3),11,dtype=np.uint8)
+        support=int(np.count_nonzero((labels==11)&color_support(rgb,'blue')))
+        self.assertEqual(support,3)
+        self.assertGreaterEqual(support,max(1,int(3*.15)))
 
     def test_read_only_inspection_does_not_mask_audit_failures(self):
         with patch.object(inspection,'inspect',side_effect=ValueError('bad digest')), \

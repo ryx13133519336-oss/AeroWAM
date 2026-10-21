@@ -11,6 +11,10 @@
 
 这些内容还不能证明模型已经在楼梯场景执行 handoff，也不能产生正式成功率。
 
+2026-10-21 进度：开发集已独立复核 8/8 条件、1,888 双机样本和 3,776 RGB 图片。第一版共享事件头/下一观察 Ridge checkpoint `subt_fixedcomm_shared_event_20261021_161727` 已训练且独立重算通过。单条下行宏 F1=0.39493，发现/确认漏检，55 次 request 只有 1 次正确；下一 RGB RMSE=0.03681，差于 persistence 的 0.01797。该结论只适用于这一条离线教师消息回放，不代表闭环成功率。补充混淆计数、precision 和 persistence 已另行重算审计；不根据测试结果选择 checkpoint。
+
+新增 `subt_handoff_frozen_eval.py` 提供完整 8 格方向留出矩阵的冻结权重评估与单独 audit，未齐全则拒绝。尚未执行真实全矩阵评估。蓝方块下行存在 JPEG 解码跨平台颜色支持差异；有 `batch_audit_error.txt` 的目录保持拒绝，不通过更换平台恢复准入。命令和已知限制见 `SUBT_NEXT_RUN_CN.md`。
+
 ## 已完成的模型接口 runner
 
 `subt_handoff_model_eval.py` 使用已发布的 `core.ModelInput/ModelOutput`，读取已经独立审计的原始楼梯 episode，只发送 RGB、原始公开代理本体状态、已送达示范消息、模型动作历史和任务指令。代理状态不伪造成 PX4 速度或健康状态。响应使用逐机 `handoff.*` 事件，避免旧单个 `intent` 的固定方向语义。

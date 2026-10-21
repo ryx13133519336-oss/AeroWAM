@@ -154,7 +154,12 @@ def inspect(root, *, component=None, delay_s=None):
                 # Tiny edge-of-occlusion masks can yield only 1-3 color pixels;
                 # bbox validity already gates detection, so keep the same 15%
                 # color fraction without a second absolute four-pixel floor.
-                if support<max(1,int(findings['pixels']*.15)):raise ValueError('No declared RGB color support')
+                if support<max(1,int(findings['pixels']*.15)):
+                    from PIL import __version__ as pillow_version, features
+                    raise ValueError(f'No declared RGB color support: sample={i}, agent={agent}, '
+                        f'color={component.color}, support={support}, mask_pixels={findings["pixels"]}, '
+                        f'required={max(1,int(findings["pixels"]*.15))}, '
+                        f'Pillow={pillow_version}, JPEG={features.version("jpg")}')
         if condition is not None:
             t=truth['elapsed_s']
             plan=planned_state(route,t,speed=condition['speed_m_s'],swapped=condition['swapped'],teammate=condition['teammate'])

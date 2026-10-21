@@ -2,6 +2,10 @@
 
 更新时间：2026-10-21
 
+最新实测：开发集已独立复核 8/8、1,888 双机样本；用户已完成探索训练和独立 audit，checkpoint 为 `D:\AeroWAM-data\subt_fixedcomm_shared_event_20261021_161727`，保持冻结。单条下行 macro F1=0.39493，found/confirm 未命中；55 次 request 只有 1 次标签匹配。RGB RMSE=0.03681，差于 persistence=0.01797；补充诊断与单独重算位于数据盘 `subt_frozen_single_diagnostic_20261021_v1.json` 及 `.audit.json`。不根据留出结果调参。新增 `subt_handoff_frozen_eval.py` 待下行 8 格审计齐全后只读评估固定权重，再单独 audit；具体命令见 `SUBT_NEXT_RUN_CN.md`。
+
+下行采集中蓝方块已有颜色审计失败：同一 JPEG 在 WSL libjpeg 6.2 与 Windows Pillow 12/libjpeg 9 的支持像素可能不同。有 `batch_audit_error.txt` 的目录保持排除，禁止换平台覆盖审计。现有阈值未放宽，错误信息已增加帧号、agent、支持计数和 JPEG 版本。失败目录保留，尚未完成采集修复或全矩阵实测。新的训练/回放/批量和冻结评估入口拒绝已知失败标记。
+
 当前用户约束：暂不研究通信影响，所有新采集固定消息延迟 0.5 s。当前开发计划为目标外观 × 身份置换 × 队友轨迹的 8 格；旧 16 格计划及 2 s 数据保留作历史证据，不用于本阶段条件覆盖。长时采集由用户在 WSL 执行，助手不自动启动或持续等待。
 
 ## 研究主线（不可偏移）

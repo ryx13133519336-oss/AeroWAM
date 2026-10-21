@@ -88,6 +88,8 @@ def agent_features(features):
 
 def load_episode(root, expected_split):
     root = Path(root).resolve()
+    if (root / "batch_audit_error.txt").exists():
+        raise ValueError(f"Known failed batch audit cannot be bypassed on another platform: {root}")
     frozen = json.loads((root / "inspection.json").read_text(encoding="utf8"))
     if not frozen.get("passed") or frozen.get("split", "development_training_only") != expected_split:
         raise ValueError(f"Episode is not independently admitted to {expected_split}: {root}")
@@ -155,7 +157,7 @@ def complete_development_paths(root, extra=()):
     expected = {condition_key(row) for row in design()["development"]["conditions"]}
     selected = {}
     for path in [*sorted(Path(root).iterdir()),*(Path(p) for p in extra)]:
-        if not (path/"inspection.json").is_file():
+        if (path/"batch_audit_error.txt").exists() or not (path/"inspection.json").is_file():
             continue
         frozen = json.loads((path/"inspection.json").read_text(encoding="utf8"))
         condition = frozen.get("condition")

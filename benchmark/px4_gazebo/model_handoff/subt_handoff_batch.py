@@ -34,6 +34,8 @@ def run(package, models, design_path, output_root, *, split="development_trainin
     output_root.mkdir(parents=True, exist_ok=True)
     done = set()
     for episode in [*output_root.iterdir(), *(Path(path) for path in existing_episodes)]:
+        if (episode / "batch_audit_error.txt").exists():
+            continue
         summary_path = episode / "summary.json"
         inspection_path = episode / "inspection.json"
         if not summary_path.is_file() or not inspection_path.is_file():

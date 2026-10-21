@@ -22,6 +22,8 @@ SCHEMA = "aerowam-subt-model-replay/1"
 
 
 def verify_source(episode):
+    if (episode / "batch_audit_error.txt").exists():
+        raise ValueError("Known failed batch audit cannot be bypassed on another platform")
     frozen = json.loads((episode / "inspection.json").read_text(encoding="utf8"))
     if frozen.get("passed") is not True or frozen.get("message_delay_s") != .5 or not frozen.get("condition"):
         raise ValueError("Requires modern independently audited fixed-0.5s episode")

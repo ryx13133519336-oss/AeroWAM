@@ -1,8 +1,10 @@
 # SubT 下一批终端运行命令
 
-先续采专家矩阵；模型接口检查与代理执行另行运行，不与采集或 warehouse Gazebo 同时运行。所有新输出保留在数据盘，训练权重和图片不提交 GitHub。
+开发集 8/8 已完成并独立复核，第一版探索训练和重算审计已完成。下一步补齐方向留出集并评估冻结 checkpoint；模型接口检查与代理执行另行运行，不与采集或 warehouse Gazebo 同时运行。所有新输出保留在数据盘，训练权重和图片不提交 GitHub。
 
-## 1. 继续开发集 8 格
+环境提示：`ryx@RYX:...$` 是 WSL Bash，运行 bash 代码块；`PS D:\AeroWAM>` 是 Windows PowerShell，运行 powershell 代码块。在 WSL 输入 `exit` 返回 PowerShell。
+
+## 1. 开发集 8 格（已完成，以下仅用于恢复）
 
 在 WSL 运行。通信延迟固定 0.5 秒，normal/delayed 是队友代理运动差异。已审计通过的 episode 会重新核验后跳过；失败目录保留并新增 attempt。
 
@@ -86,6 +88,27 @@ python -B -m benchmark.px4_gazebo.model_handoff.subt_handoff_learn audit --run-d
 ```
 
 本轮修正了共享事件头的 self/peer 特征排列，交换两机身份时同步交换 RGB、位姿、消息计数和近因特征。输出仍只是集中式事件分类与下一观察 Ridge 基线；世界模型没有动作条件，不能把离线事件 F1 当作闭环任务成功率，不能写入正式榜单。旧历史 checkpoint 仍按旧排列审计，不静默改变其解释。
+
+## 5. 下行 8 格完成后评估冻结模型，不重新训练
+
+当前冻结 checkpoint：`D:\AeroWAM-data\subt_fixedcomm_shared_event_20261021_161727`。单条红球下行诊断 macro F1=0.39493，found/confirm 均未命中；55 次 request 预测只有 1 次正确（精确率 1.82%）。RGB 下一观察 RMSE=0.03681，而沿用当前画面的 persistence 为 0.01797。该基线尚未证明迁移能力，不根据这条测试结果调参。补充诊断及独立重算保存在数据盘 `subt_frozen_single_diagnostic_20261021_v1.json` 和 `.audit.json`。
+
+以下在 Windows PowerShell 执行；测试矩阵不足 8 格会直接拒绝，不会拿部分条件充当完整评估。评估读取固定权重，不拟合、不选阈值，输出混淆矩阵、逐事件 precision/recall/F1、逐条件结果以及 persistence 比较。录制消息来自教师，仍是离线诊断。
+
+```powershell
+Set-Location D:\AeroWAM
+$subtEvalDir = 'D:\AeroWAM-data\subt_frozen_descent_eval_' + (Get-Date -Format yyyyMMdd_HHmmss)
+python -B -u -m benchmark.px4_gazebo.model_handoff.subt_handoff_frozen_eval evaluate `
+  --run-dir D:\AeroWAM-data\subt_fixedcomm_shared_event_20261021_161727 `
+  --test-root D:\AeroWAM-data\subt_stair_direction_test_20261021_v1 `
+  --extra-test-episodes D:\AeroWAM-data\subt_stair_descent_test_red_swapped_normal_comm05_20261021_v1 D:\AeroWAM-data\subt_stair_descent_test_blue_swapped_normal_comm05_20261021_v1 `
+  --output-dir $subtEvalDir
+if ($LASTEXITCODE -eq 0) {
+  python -B -m benchmark.px4_gazebo.model_handoff.subt_handoff_frozen_eval audit --output-dir $subtEvalDir
+}
+```
+
+采集端已出现蓝方块 RGB 颜色审计失败；同一 JPEG 在 Windows Pillow 12/libjpeg 9 和 WSL libjpeg 6.2 的解码会改变阈值边缘的颜色支持计数。保留 `batch_audit_error.txt` 的失败目录不计入覆盖，不能换平台补写 passed 来绕过。新报错包含帧号、agent、支持像素、阈值和 JPEG 版本，便于定位；审计阈值保持不变。全矩阵评估尚待用户采集通过后运行，不能把单元测试通过写成实测通过。
 
 ## 后续顺序
 

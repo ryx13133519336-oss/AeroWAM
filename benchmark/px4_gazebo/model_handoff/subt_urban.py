@@ -118,6 +118,8 @@ def main():
     parser.add_argument("--timeout-s", type=float, default=60.)
     parser.add_argument("--ros-domain-id", type=int, default=83)
     parser.add_argument("--gui", action="store_true", help="GUI during disarmed startup")
+    parser.add_argument("--control-link-check", action="store_true",
+                        help="Verify fresh disarm ACKs through PX4 writers; no motion or arm command")
     parser.add_argument("--preview-seconds", type=float, help="Optional bounded GUI smoke; default runs until closed")
     parser.add_argument("--move-targets", action="store_true", help="Bounded kinematic trolley preview, no PX4")
     parser.add_argument("--target-speed", type=float, default=.15, help="Target speed in simulation m/s, <=0.25")
@@ -172,8 +174,9 @@ def main():
         result = run(px4_root=args.px4_root, models=args.models, output=args.output_dir,
                      timeout_s=args.timeout_s, domain=args.ros_domain_id, udp_only=True,
                      prepared_scene=scene(args.package, args.models, aircraft=True, target_components=(args.target_a, args.target_b)),
-                     agent_path=args.agent, gui=args.gui)
+                     agent_path=args.agent, gui=args.gui, control_link_check=args.control_link_check)
         print(json.dumps({k: result.get(k) for k in ("startup_passed", "flight_ready", "motion_commands_sent",
+                                                    "control_link_check", "control_link_verified", "command_acks",
                                                     "pair_counts", "ros_counts", "error", "owned_processes_stopped")}, indent=2))
         raise SystemExit(0 if result["startup_passed"] and result["owned_processes_stopped"] and not result.get("cleanup_errors") else 2)
 

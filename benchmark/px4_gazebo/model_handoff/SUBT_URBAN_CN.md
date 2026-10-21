@@ -102,6 +102,20 @@ source /home/ryx/px4_ros2_ws/install/setup.bash
 
 可加 `--gui`。独立 Gazebo 分区、新 ROS 域、临时 Agent 端口、新 PX4 工作目录；不发布起飞、解锁或轨迹指令。只清理本次进程。启动成功只说明相机和遥测就绪，不说明预检或飞行通过。没有改 WSL 校时链路，也没有放宽 10 ms 飞行时钟门槛或 400 ms 推理预算。
 
+若要在下一轮启动检查中验证 PX4 控制写端，再加 `--control-link-check`：程序会等待六个逐机 writer 各匹配一个 PX4 reader，并发送每机一条 `command=400` 的未解锁 disarm 请求，要求收到新鲜 `result=0` ACK。它不会发送 offboard、轨迹、解锁或起飞命令；即使通过，`flight_admitted` 仍为 `false`。
+
+```bash
+/usr/bin/python3 -B -m benchmark.px4_gazebo.model_handoff.subt_urban startup \
+  --package /mnt/d/AeroWAM-data/external_scenes/subt_urban_pinned_v2 \
+  --models /mnt/d/AeroWAM-data/annotation_models_v1 \
+  --px4-root /home/ryx/PX4-Autopilot \
+  --agent /mnt/d/AeroWAM-data/tools/microxrce_agent_v242_humble/MicroXRCEAgent \
+  --ros-domain-id 83 --timeout-s 120 --control-link-check \
+  --output-dir "/mnt/d/AeroWAM-data/subt_startup_control_$(date +%Y%m%d_%H%M%S)"
+```
+
+准入检查应同时看到 `startup_passed=true`、`control_link_verified=true`、两条 `result=0` disarm ACK、`motion_commands_sent=0` 和 `owned_processes_stopped=true`。若失败，保留输出目录和 `control_link_diagnostics`，不要通过重试或放宽门限把它改成通过。
+
 ## 已保存的实测证据（截至 2026-10-21）
 
 | 检查 | 结果 | 本机数据目录 |

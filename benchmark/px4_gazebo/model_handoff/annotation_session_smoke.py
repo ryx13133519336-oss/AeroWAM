@@ -122,7 +122,7 @@ def odometry_snapshot(message):
 
 
 def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77, udp_only=False,
-        prepared_scene=None, agent_path=None, gui=False):
+        prepared_scene=None, agent_path=None, gui=False, control_link_check=False):
     if not 10 <= timeout_s <= 180 or type(domain) is not int or not 1 <= domain <= 100:
         raise ValueError("Timeout must be 10..180 seconds; ROS domain must be 1..100")
     if os.name == "nt":
@@ -135,6 +135,9 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
     import rclpy
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from px4_msgs.msg import VehicleOdometry, VehicleStatus
+    if control_link_check:
+        from px4_msgs.msg import VehicleCommandAck
+        from .search_control_link import PX4ControlLink, px4_topic
     from gz.transport13 import Node
     from gz.msgs10.image_pb2 import Image
     executable = px4_root / "build/px4_sitl_default/bin/px4"
@@ -166,11 +169,14 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
     node = ros = None
     rclpy_started = False
     lock = threading.Lock()
-    frames, counts, latest_status, odometry, received_ros = {}, {}, {}, {}, {}
+    frames, counts, latest_status, status_messages, odometry, received_ros = {}, {}, {}, {}, {}, {}
+    command_acks, control_link = [], None
     summary = {"schema": "aerowam-annotation-startup/1-draft", "partition": partition,
                "ros_domain_id": domain, "dds_port": port, "px4_instances": list(INSTANCES),
                "startup_passed": False, "flight_ready": False, "live_multitask_ready": False,
-               "motion_commands_sent": 0, "world_sha256": hashlib.sha256((output / "world.sdf").read_bytes()).hexdigest(),
+               "motion_commands_sent": 0, "control_link_check": bool(control_link_check),
+               "control_link_verified": False,
+               "world_sha256": hashlib.sha256((output / "world.sdf").read_bytes()).hexdigest(),
                "model_resources": verify(models), "dds_transport": "udp_only_diagnostic" if udp_only else "inherited"}
     summary["world_name"] = world_name
     if scene_resources is not None:
@@ -209,6 +215,7 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
                     counts[f"{k}_{i}"] += 1
                     received_ros[k, i] = time.monotonic()
                     if k == "status":
+                        status_messages[i] = msg
                         latest_status[i] = {"arming_state": int(msg.arming_state), "failsafe": bool(msg.failsafe),
                                             "pre_flight_checks_pass": bool(msg.pre_flight_checks_pass)}
                     else:
@@ -236,6 +243,16 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
                     raise RuntimeError(f"Cannot subscribe {topic}")
                 subscriptions.append(topic)
         summary["camera_pairs"] = pairs
+        if control_link_check:
+            for index in (0, 1):
+                def receive_ack(msg, i=index):
+                    command_acks.append({"agent": f"uav_{i}", "command": int(msg.command),
+                                         "result": int(msg.result), "target_system": int(msg.target_system),
+                                         "target_component": int(msg.target_component),
+                                         "timestamp": int(msg.timestamp), "monotonic_ns": time.monotonic_ns()})
+                ros.create_subscription(VehicleCommandAck,
+                    px4_topic(index, "out", "vehicle_command_ack", VehicleCommandAck), receive_ack, qos)
+            control_link = PX4ControlLink(ros, timeout_s=min(float(timeout_s), 60.))
         spawn("dds_agent", [agent, "udp4", "-p", str(port)], env, output)
         spawn("gazebo", ["gz", "sim", "-s", "-r", "--headless-rendering", "-v", "3", str(output / "world.sdf")], env, output)
         if gui:
@@ -246,6 +263,8 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
             px4_env = smoke_environment(env, partition=partition, domain=domain, port=port, index=index)
             px4_env["PX4_GZ_WORLD"] = world_name
             spawn(f"px4_{index}", [str(executable), str(rootfs / "etc"), "-i", str(instance), "-w", str(working), "-d"], px4_env, rootfs)
+        if control_link is not None:
+            control_link.start()
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             failed = [f"{name} exited {p.returncode}" for name, p in processes if p.poll() is not None]
@@ -254,6 +273,10 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
             rclpy.spin_once(ros, timeout_sec=.1)
             if any(status["arming_state"] != 1 for status in latest_status.values()):
                 raise RuntimeError("Expected disarmed PX4 throughout diagnostic")
+            if control_link is not None:
+                control_link.poll(command_acks, status_messages, received_ros)
+                if control_link.phase == "FAILED":
+                    raise RuntimeError(control_link.reason)
             with lock:
                 pair_counts = {pair["agent_id"]: len(set(frames.get(pair["rgb"], {})) &
                                set(frames.get(pair["segmentation"] + "/labels_map", {}))) for pair in pairs}
@@ -262,7 +285,8 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
             now = time.monotonic()
             fresh = all(now - received_ros.get((kind, i), -math.inf) <= limit
                         for kind, limit in (("status", 2.), ("odometry", .5)) for i in (0, 1))
-            if all(n >= 3 for n in pair_counts.values()) and all(n >= 2 for n in counts.values()) and healthy and finite_odometry and fresh:
+            control_ready = control_link is None or control_link.verified
+            if all(n >= 3 for n in pair_counts.values()) and all(n >= 2 for n in counts.values()) and healthy and finite_odometry and fresh and control_ready:
                 break
         else:
             raise TimeoutError(f"Startup streams missing/insufficient: ROS={counts}, pairs={pair_counts}")
@@ -299,6 +323,10 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
             summary["ros_counts"] = dict(counts)
             summary["latest_status"] = dict(latest_status)
             summary["latest_odometry"] = dict(odometry)
+            summary["command_acks"] = command_acks
+            if control_link is not None:
+                summary["control_link_verified"] = bool(control_link.verified)
+                summary["control_link_diagnostics"] = control_link.diagnostics()
             if node is not None:
                 for topic in subscriptions:
                     try:
@@ -332,9 +360,12 @@ def main():
     parser.add_argument("--timeout-s", type=float, default=120.)
     parser.add_argument("--ros-domain-id", type=int, default=77)
     parser.add_argument("--udp-only", action="store_true", help="Scoped FastDDS UDP transport diagnostic; no system config change")
+    parser.add_argument("--control-link-check", action="store_true",
+                        help="Verify fresh disarm ACKs through the six PX4 control writers; no motion or arm command")
     args = parser.parse_args()
     result = run(px4_root=args.px4_root, models=args.models, output=args.output_dir,
-                 timeout_s=args.timeout_s, domain=args.ros_domain_id, udp_only=args.udp_only)
+                 timeout_s=args.timeout_s, domain=args.ros_domain_id, udp_only=args.udp_only,
+                 control_link_check=args.control_link_check)
     print(json.dumps(result, indent=2))
     raise SystemExit(0 if result["startup_passed"] and result["owned_processes_stopped"] and not result.get("cleanup_errors") else 2)
 

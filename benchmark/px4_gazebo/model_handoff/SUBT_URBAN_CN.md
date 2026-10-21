@@ -150,3 +150,61 @@ source /home/ryx/px4_ros2_ws/install/setup.bash
 执行对话需要显式适配场景入口、室内坐标/高度/碰撞安全和评测对象绑定，然后再申请/验证飞行。只读启动中的预检失败必须先解释，不可关掉预检来宣称场景已可飞。起飞前需核查两机体积净空与接触监测，原 lawn/warehouse 控制器的航路和地理高度假设不能照搬进楼内。
 
 `role_assignment=None`，不能把相机编号当作永久搜索/确认角色。世界/资源契约、目标位置、实例图、射线和私有验收结果只进仿真/安全/裁判侧，策略只接允许的公开观测及队友通信。之后的模型闭环、队友行为变化与新任务组合迁移仍需真实测评；本次静态对照不提供那些结论。
+
+## 楼梯跨层 handoff 专家示范（2026-10-21）
+
+此开发示范服务于本文开头的研究主线，不把场景接入或教师成功冒充模型成绩。目标沿原建筑折返楼梯由一层到二层，经过中间平台，再从二层出口进入走廊；路线约 34 m，目标中心垂直跨度约 10 m。楼梯踏面附近的支撑高度由固定碰撞网格求得，目标包围盒沿全路线做保守扫掠检查，不是穿过楼板的直线插值。相机代理另做体积净空和相互间距检查；这些检查不等于真实无人机机体、旋翼或接触动力学验收。
+
+渲染可见性顺序为“仅初始观察者可见 → 双方可见的交接窗口 → 仅接手者可见”。因果事件教师依次给出 `found → handoff_request → handoff_accept → confirm`，确认要求原观察者已经失视且接手者稳定可见，并遵守声明的消息延迟。当前双方同时可见窗口较长，尚未验证双方同时失视下的预测恢复能力。
+
+两条已保存示范分别采用红球 `uav_0 → uav_1`、蓝方块 `uav_1 → uav_0`。这说明采集器支持身份置换，不表示颜色决定角色，也不证明策略已经学会角色不变性。角色由可见性事件临时形成，不作为永久 UAV 编号分工；后续应将每种目标与两种身份置换交叉采集，避免颜色与身份混杂。
+
+### 采集与独立审计
+
+在 WSL 的 `/mnt/d/AeroWAM` 下运行；每次必须使用不存在的新输出目录。此入口只启动 Gazebo 和运动学相机代理，不启动 PX4、不解锁、不发送飞控命令：
+
+```bash
+/usr/bin/python3 -B -m benchmark.px4_gazebo.model_handoff.subt_handoff_collect \
+  --package /mnt/d/AeroWAM-data/external_scenes/subt_urban_pinned_v2 \
+  --models /mnt/d/AeroWAM-data/annotation_models_v1 \
+  --target red:sphere \
+  --output-dir "/mnt/d/AeroWAM-data/subt_stair_red_$(date +%Y%m%d_%H%M%S)"
+
+/usr/bin/python3 -B -m benchmark.px4_gazebo.model_handoff.subt_handoff_collect \
+  --package /mnt/d/AeroWAM-data/external_scenes/subt_urban_pinned_v2 \
+  --models /mnt/d/AeroWAM-data/annotation_models_v1 \
+  --target blue:cube --swapped \
+  --output-dir "/mnt/d/AeroWAM-data/subt_stair_blue_$(date +%Y%m%d_%H%M%S)"
+```
+
+`--speed` 默认 0.3 m/s、上限 0.4 m/s；`--teammate delayed` 改变接手者到达轨迹，并将消息延迟从 0.5 s 改为 2 s，属于联合变化条件，不能据此分别归因轨迹或通信的影响。`--reverse` 仅是候选反向路线参数，不表示反向采集已通过。所有候选条件都必须重新通过几何、渲染和因果审计。
+
+独立审计默认写出 `inspection.json` 和拼图；重复检查现有采集目录时加 `--read-only`，保证不改写任何采集文件。旧红色数据缺少条件元数据，审计需显式指定目标和消息延迟：
+
+```bash
+/usr/bin/python3 -B -m benchmark.px4_gazebo.model_handoff.subt_handoff_inspect \
+  --episode /mnt/d/AeroWAM-data/subt_stair_expert_red_v1 \
+  --target red:sphere --message-delay-s 0.5 --read-only
+
+/usr/bin/python3 -B -m benchmark.px4_gazebo.model_handoff.subt_handoff_inspect \
+  --episode /mnt/d/AeroWAM-data/subt_stair_expert_blue_swapped_v1 --read-only
+```
+
+两组现有数据分别为 236 个双视角采样、472 张 RGB；均有约 10 m 垂直跨度，且已有独立审计报告。旧红色数据没有原始源代码摘要或位姿请求日志，审计明确保留 `source_capture_legacy=true`，不补写伪造日志。蓝色数据可重放核验位姿请求，但请求成功不等于曝光时刻动作已精确执行。
+
+### 学习数据接口与使用边界
+
+先完成默认审计生成报告，再导出到新目录。导出器会重新审计并核对原报告文件摘要，不只相信成功标志：
+
+```bash
+/usr/bin/python3 -B -m benchmark.px4_gazebo.model_handoff.subt_handoff_data \
+  --episodes /mnt/d/AeroWAM-data/subt_stair_expert_red_v1 \
+             /mnt/d/AeroWAM-data/subt_stair_expert_blue_swapped_v1 \
+  --output-dir /mnt/d/AeroWAM-data/subt_stair_handoff_training_v1
+```
+
+本机此目录已生成，包含 472 个联合样本、944 张图、470 个下一观察对，不应重复覆盖。`inputs.jsonl` 只含 `instruction / rgb / proprioception / messages / dt_s`；公开 RGB 单独复制到 `images/`。`event_supervision.jsonl` 和 `future_observation_supervision.jsonl` 是训练监督，不是策略当前输入。目标位置、实例掩码、私有可见性、路线进度、未来帧和当前教师标签均不进入公开输入；`design.json` 仅作离线溯源，包含私有文件的摘要，不是模型特征。
+
+当前数据只支持特权教师下的联合事件模仿与下一观察预测开发：相机朝向依赖隐藏目标位置，双视角输入不是已验证的分散式策略；相机姿态来自理想代理而非 PX4 遥测。期望下一观察位姿不是已执行飞控动作，因此导出不提供运动控制监督，也不能宣称建立动作条件世界模型。
+
+所有样本均标记 `development_training_only`，同属一个场景族。连续帧、颜色变化和身份置换不能当作独立测试重复；没有创建随机帧级测试集，没有模型成绩、组合迁移结论或飞行放行。下一阶段应围绕主线加入真正的失视恢复、独立队友变化条件及独立路线/场景留出，再评价学习策略及世界模型的贡献，而非继续堆积同一路线相邻帧。

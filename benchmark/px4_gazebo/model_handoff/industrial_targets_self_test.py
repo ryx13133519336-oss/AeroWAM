@@ -106,6 +106,13 @@ class MotionTests(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 request_in_worker(worker, "/test", poses_for(0))
 
+    def test_motion_feedback_timeout_is_bounded(self):
+        from .industrial_target_motion import run
+        with self.assertRaises(ValueError):
+            run("contract", "output", duration=30., speed=.2, feedback_timeout_s=1.)
+        with self.assertRaises(ValueError):
+            run("contract", "output", duration=30., speed=.2, feedback_timeout_s=31.)
+
     def test_triangle_box_surface_touch_and_separation(self):
         triangle = np.array([[[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]])
         self.assertTrue(triangles_touch_box(triangle, [-.1, -.1, -.1], [.5, .5, .1]))

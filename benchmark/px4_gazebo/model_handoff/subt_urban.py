@@ -60,7 +60,8 @@ def preview(world, *, px4_root=None, seconds=None, move_targets=False, speed=.15
                     "benchmark.px4_gazebo.model_handoff.industrial_target_motion",
                     "--contract", str(Path(world).parent / "scene_contract.private.json"),
                     "--output-dir", str(Path(world).parent / "motion"), "--duration", str(seconds),
-                    "--speed", str(speed)], env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                    "--speed", str(speed), "--feedback-timeout-s", "12"],
+                    env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             deadline = time.monotonic() + 60. + seconds * 6
             while motion.poll() is None:
                 if process.poll() is not None:

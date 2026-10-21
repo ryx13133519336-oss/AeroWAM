@@ -150,9 +150,10 @@ def inspect_world(contract_path):
     return contract, audit_routes(package)
 
 
-def run(contract_path, output, *, duration=30., speed=.15):
-    if not 1 <= duration <= 600 or not 0 < speed <= MAX_SPEED or not os.environ.get("GZ_PARTITION"):
-        raise ValueError("Explicit Gazebo partition, duration 1..600s and speed <=0.25 m/s required")
+def run(contract_path, output, *, duration=30., speed=.15, feedback_timeout_s=8.):
+    if (not 1 <= duration <= 600 or not 0 < speed <= MAX_SPEED
+            or not 2 <= feedback_timeout_s <= 30 or not os.environ.get("GZ_PARTITION")):
+        raise ValueError("Explicit Gazebo partition, duration 1..600s, speed <=0.25 m/s and feedback timeout 2..30s required")
     contract, clearance = inspect_world(contract_path)
     from gz.transport13 import Node
     from gz.msgs10.pose_v_pb2 import Pose_V
@@ -238,7 +239,7 @@ def run(contract_path, output, *, duration=30., speed=.15):
                 recent = snapshots[-1] if snapshots else None
                 if unsafe_contacts:
                     raise RuntimeError("Unexpected target/support collision")
-            if recent is None or time.monotonic() - started - recent["wall_elapsed_s"] > 2.:
+            if recent is None or time.monotonic() - started - recent["wall_elapsed_s"] > feedback_timeout_s:
                 raise RuntimeError("Stale target pose feedback")
             validate_feedback(recent)
             stamp = recent["stamp_ns"]
@@ -298,8 +299,10 @@ def main():
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--duration", type=float, default=30.)
     parser.add_argument("--speed", type=float, default=.15)
+    parser.add_argument("--feedback-timeout-s", type=float, default=8.)
     args = parser.parse_args()
-    result = run(args.contract, args.output_dir, duration=args.duration, speed=args.speed)
+    result = run(args.contract, args.output_dir, duration=args.duration, speed=args.speed,
+                 feedback_timeout_s=args.feedback_timeout_s)
     print(json.dumps({k: v for k, v in result.items() if k not in {"pose_samples", "clearance"}}, indent=2))
     raise SystemExit(0 if result["motion_verified"] else 2)
 

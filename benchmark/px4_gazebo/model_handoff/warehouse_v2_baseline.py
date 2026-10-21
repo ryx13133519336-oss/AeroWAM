@@ -45,7 +45,8 @@ def constant_velocity_predictions(record: Any) -> list[dict[str, Any]]:
     """
     inputs = model_inputs(record)
     history: list[tuple[float, int]] = []
-    requested = False
+    pending: set[str] = set()
+    confirmed: set[str] = set()
     predictions: list[dict[str, Any]] = []
     for item in inputs[:-1]:
         current = _track_from_input(item.to_wire())
@@ -74,18 +75,23 @@ def constant_velocity_predictions(record: Any) -> list[dict[str, Any]]:
             }
 
         observations = item.to_wire()["observations"]
-        source_visible = bool(observations[AGENTS[0]]["visual_track"].get("visible"))
-        receiver_visible = bool(observations[AGENTS[1]]["visual_track"].get("visible"))
-        event = "wait"
-        if not source_visible and receiver_visible and not requested:
-            event = "request"
-            requested = True
-        elif requested and receiver_visible:
-            event = "confirm"
+        visible_agents = [agent for agent in AGENTS
+                          if observations[agent]["visual_track"].get("visible")]
+        event, actor = "wait", AGENTS[len(predictions) % len(AGENTS)]
+        if len(visible_agents) == 1:
+            receiver = visible_agents[0]
+            source = next(agent for agent in AGENTS if agent != receiver)
+            if receiver not in pending:
+                event, actor = "request", source
+                pending.add(receiver)
+            elif receiver not in confirmed:
+                event, actor = "confirm", receiver
+                confirmed.add(receiver)
         predictions.append({
             "sample_index": int(item.to_wire().get("timestamp_ns", 0) // 500_000_000),
             "horizons": horizons,
-            "action": {"event": event, "evidence": "public_visual_track" if current else "insufficient"},
+            "action": {"event": event, "agent_id": actor,
+                       "evidence": "public_visual_track" if current else "insufficient"},
         })
     return predictions
 

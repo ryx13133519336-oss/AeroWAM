@@ -43,6 +43,43 @@ class WarehouseV2TaskTests(unittest.TestCase):
         self.assertNotIn("position_enu", public)
         self.assertNotIn("motion_family", public)
 
+    def test_agent_roles_are_seeded_but_not_fixed_to_agent_ids(self):
+        source_agents = set()
+        for seed in range(20):
+            record, truth = generate_episode(seed, "seen")
+            exclusive = next(row for row in truth["rows"]
+                             if sum(row["visible_by_agent"].values()) == 1)
+            receiver = next(agent for agent, visible in exclusive["visible_by_agent"].items() if visible)
+            source_agents.add(next(agent for agent in AGENTS if agent != receiver))
+            relevant = [item for item in record.task_supervision
+                        if item.sample_index == exclusive["sample_index"]
+                        and item.event.endswith((".request", ".confirm"))]
+            by_event = {item.event.rsplit(".", 1)[-1]: item.agent_id for item in relevant}
+            self.assertEqual(by_event.get("request"), next(agent for agent in AGENTS if agent != receiver))
+            self.assertEqual(by_event.get("confirm"), receiver)
+        self.assertEqual(source_agents, set(AGENTS))
+
+    def test_scoring_accepts_either_grounded_request_direction(self):
+        for seed in range(20):
+            record, truth = generate_episode(seed, "seen")
+            index = next(i for i, row in enumerate(truth["rows"][:-1])
+                         if sum(row["visible_by_agent"].values()) == 1)
+            row_truth = truth["rows"][index]
+            receiver = next(agent for agent, visible in row_truth["visible_by_agent"].items() if visible)
+            source = next(agent for agent in AGENTS if agent != receiver)
+            predictions = [{
+                "sample_index": i,
+                "horizons": {str(h): {"mean_y": 0.0, "std_y": 1.0,
+                                       "visible_probability": {agent: 0.5 for agent in AGENTS}}
+                              for h in HORIZONS_S},
+                "action": ({"event": "request", "agent_id": source} if i == index else
+                           {"event": "confirm", "agent_id": receiver} if i == index + 1 else
+                           {"event": "wait", "agent_id": AGENTS[i % 2]}),
+            } for i in range(len(record.observations) - 1)]
+            score = score_predictions(record, truth, predictions)
+            self.assertEqual(score["unsafe_handoff_rate"], 0.0)
+            self.assertTrue(score["handoff_success"])
+
     def test_baseline_prediction_scores_and_unsafe_request_is_penalized(self):
         record, truth = generate_episode(9, "new_motion")
         unsafe_index = next(

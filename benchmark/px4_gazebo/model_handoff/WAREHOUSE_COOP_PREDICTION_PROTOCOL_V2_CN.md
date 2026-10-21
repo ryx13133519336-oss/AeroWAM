@@ -125,7 +125,9 @@
 
 - `warehouse_v2_task.py`：任务 ID `warehouse_coop_prediction`，场景 ID `aws_warehouse_handoff_v2`，五个固定迁移 split，以及公开输入、私有 truth 和评分器；
 - `warehouse_v2_baseline.py`：只读取 `ModelInput` 的 constant-velocity / 保守交接 baseline；
+- `warehouse_v2_scene_adapter.py`：把已同步的双机公开观测映射到 core `PublicObservation`/`ModelInput`，拒绝真值字段、跨 episode 数据和乱序时间戳；
 - `warehouse_v2_task_self_test.py`、`warehouse_v2_baseline_self_test.py`：任务边界、core roundtrip、评分器和报告回归测试；
+- `warehouse_v2_scene_adapter_self_test.py`：验证 live observation 的公开边界和同步约束；
 - `warehouse_v2_dataset_20261021_v1`：每个 split 两个 episode 的可查看数据样例；
 - `warehouse_v2_baseline_20261021_v1`：五个 split 的 NLL、visibility Brier、校准误差、危险交接率和协作成功率诊断报告。
 

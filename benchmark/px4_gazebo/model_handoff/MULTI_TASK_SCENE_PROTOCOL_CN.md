@@ -2,6 +2,8 @@
 
 本协议把任务、场景、模型和证据分成四层。楼梯 handoff 是第一套参考实现；warehouse、search、inspection 以及同学后续提供的任务和场景都通过 adapter 接入，不修改核心字段语义。
 
+具体字段、代码模板、审计边界和提交步骤见 [INTERFACE_ADAPTATION_GUIDE_CN.md](INTERFACE_ADAPTATION_GUIDE_CN.md)。
+
 ## 固定边界
 
 模型服务只接收 `core.model_io.ModelInput`：任务说明、场景标识、每架无人机的公开观测、已送达消息、动作历史和公开任务上下文。`role_assignment` 永远为 `null`，模型不能假定 `uav_0` 是发现者或 `uav_1` 是接收者。角色由可见性、消息和任务状态形成，并由任务 evaluator 在私有审计侧归因。

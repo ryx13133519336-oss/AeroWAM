@@ -121,6 +121,13 @@ def odometry_snapshot(message):
             "pose_frame": int(message.pose_frame), "velocity_frame": int(message.velocity_frame)}
 
 
+def dual_status_fresh(status_messages, received_ros, now, limit_s=2.):
+    """Gate control-link polling until both initial PX4 status streams exist."""
+    return (set(status_messages) == {0, 1}
+            and all(0 <= now - received_ros.get(("status", index), -math.inf) <= limit_s
+                    for index in (0, 1)))
+
+
 def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77, udp_only=False,
         prepared_scene=None, agent_path=None, gui=False, control_link_check=False):
     if not 10 <= timeout_s <= 180 or type(domain) is not int or not 1 <= domain <= 100:
@@ -171,6 +178,7 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
     lock = threading.Lock()
     frames, counts, latest_status, status_messages, odometry, received_ros = {}, {}, {}, {}, {}, {}
     command_acks, control_link = [], None
+    control_link_started_at = None
     summary = {"schema": "aerowam-annotation-startup/1-draft", "partition": partition,
                "ros_domain_id": domain, "dds_port": port, "px4_instances": list(INSTANCES),
                "startup_passed": False, "flight_ready": False, "live_multitask_ready": False,
@@ -265,6 +273,7 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
             spawn(f"px4_{index}", [str(executable), str(rootfs / "etc"), "-i", str(instance), "-w", str(working), "-d"], px4_env, rootfs)
         if control_link is not None:
             control_link.start()
+            control_link_started_at = time.monotonic()
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             failed = [f"{name} exited {p.returncode}" for name, p in processes if p.poll() is not None]
@@ -273,16 +282,18 @@ def run(*, px4_root: Path, models: Path, output: Path, timeout_s=120., domain=77
             rclpy.spin_once(ros, timeout_sec=.1)
             if any(status["arming_state"] != 1 for status in latest_status.values()):
                 raise RuntimeError("Expected disarmed PX4 throughout diagnostic")
+            now = time.monotonic()
             if control_link is not None:
-                control_link.poll(command_acks, status_messages, received_ros)
-                if control_link.phase == "FAILED":
-                    raise RuntimeError(control_link.reason)
+                if (dual_status_fresh(status_messages, received_ros, now)
+                        or now - control_link_started_at >= control_link.timeout_s):
+                    control_link.poll(command_acks, status_messages, received_ros)
+                    if control_link.phase == "FAILED":
+                        raise RuntimeError(control_link.reason)
             with lock:
                 pair_counts = {pair["agent_id"]: len(set(frames.get(pair["rgb"], {})) &
                                set(frames.get(pair["segmentation"] + "/labels_map", {}))) for pair in pairs}
             healthy = (len(latest_status) == 2 and all(not s["failsafe"] for s in latest_status.values()))
             finite_odometry = len(odometry) == 2 and all(item["finite"] for item in odometry.values())
-            now = time.monotonic()
             fresh = all(now - received_ros.get((kind, i), -math.inf) <= limit
                         for kind, limit in (("status", 2.), ("odometry", .5)) for i in (0, 1))
             control_ready = control_link is None or control_link.verified

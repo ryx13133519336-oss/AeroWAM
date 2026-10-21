@@ -13,6 +13,7 @@ import zipfile
 import numpy as np
 
 from . import subt_urban_scene as s
+from .annotation_session_smoke import dual_status_fresh
 from .subt_urban import export
 from .subt_urban_geometry import collada_triangles, segment_hits
 
@@ -33,6 +34,7 @@ class SubTTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.source = self.root / "source"
+
         self.source.mkdir()
         self.package = self.root / "package"
         self.assets = deepcopy(s.ASSETS)
@@ -50,6 +52,12 @@ class SubTTests(unittest.TestCase):
         self.patch = patch.object(s, "ASSETS", self.assets)
         self.patch.start()
         self.addCleanup(self.patch.stop)
+
+    def test_control_link_waits_for_both_initial_status_streams(self):
+        received = {("status", 0): 10., ("status", 1): 10.}
+        self.assertFalse(dual_status_fresh({0}, received, 10.1))
+        self.assertTrue(dual_status_fresh({0, 1}, received, 10.1))
+        self.assertFalse(dual_status_fresh({0, 1}, received, 12.1))
 
     def prepared(self):
         with patch.object(s, "verify", return_value={}):

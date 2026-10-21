@@ -86,3 +86,29 @@ def segment_hits(triangles, start, end):
     t = inverse * np.einsum("ij,ij->i", edge2, q)
     mask = usable & (u >= -1e-8) & (v >= -1e-8) & (u + v <= 1 + 1e-8) & (t > 1e-6) & (t < 1 - 1e-6)
     return np.sort(t[mask])
+
+
+def triangles_touch_box(triangles, low, high):
+    """Conservative triangle/AABB separating-axis check; touching is occupied."""
+    low, high = np.asarray(low, dtype=float), np.asarray(high, dtype=float)
+    if low.shape != (3,) or high.shape != (3,) or not np.isfinite([low, high]).all() or np.any(high <= low):
+        raise ValueError("Finite nonempty bounds required")
+    candidates = triangles[np.all(triangles.max(axis=1) >= low - 1e-9, axis=1)
+                           & np.all(triangles.min(axis=1) <= high + 1e-9, axis=1)]
+    half, center = (high - low) / 2, (high + low) / 2
+    basis = np.eye(3)
+    for triangle in candidates - center:
+        edges = np.roll(triangle, -1, axis=0) - triangle
+        axes = [*basis, np.cross(edges[0], edges[1]), *(np.cross(e, axis) for e in edges for axis in basis)]
+        separated = False
+        for axis in axes:
+            if np.linalg.norm(axis) < 1e-12:
+                continue
+            projection = triangle @ axis
+            radius = half @ np.abs(axis)
+            if projection.min() > radius + 1e-9 or projection.max() < -radius - 1e-9:
+                separated = True
+                break
+        if not separated:
+            return True
+    return False

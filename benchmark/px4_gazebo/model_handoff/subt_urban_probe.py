@@ -14,6 +14,8 @@ from .pixel_annotations import CaptureKey, annotate
 from .search_pilot_scene import LABELS, manual_condition
 from .subt_urban_scene import CAMERAS, WORLD, TARGETS, scene, verify
 from .warehouse_scene import local_resource, sha256
+from .industrial_targets import (LABELS as INDUSTRIAL_LABELS, POSITIONS, from_configuration,
+                                 fingerprint, color_support, visible_components, parse_component)
 
 
 def inspect_capture(folder):
@@ -29,6 +31,11 @@ def inspect_capture(folder):
     world = ET.parse(folder / "world.sdf").getroot().find("world")
     if world.get("name") != WORLD:
         raise ValueError("Unexpected SubT world")
+    target_config = summary.get("scene_resources", {}).get("industrial_targets")
+    industrial = from_configuration(target_config) if target_config is not None else None
+    labels = INDUSTRIAL_LABELS if industrial is not None else {**LABELS, 100: None}
+    if industrial is not None and summary["scene_resources"].get("target_config_sha256") != fingerprint(industrial):
+        raise ValueError("Target configuration fingerprint mismatch")
     specs = summary["camera_pairs"]
     if len(specs) != 2 or {s["agent_id"] for s in specs} != {"uav_0", "uav_1"}:
         raise ValueError("Two distinct camera bindings required")
@@ -68,25 +75,29 @@ def inspect_capture(folder):
             for name, raster in (("native", pair), ("policy_256", resize_pair(pair))):
                 height, width = raster.object_labels.shape
                 capture = CaptureKey(agent, stamp, stamp, summary["partition"], width, height)
-                annotation = annotate(task=manual_condition("寻找目标并协作确认", "red", role_mode="unassigned"),
-                                      rgb_capture=capture, label_capture=capture,
-                                      instance_labels=raster.object_labels, label_to_object={**LABELS, 100: None})
+                if industrial is None:
+                    annotation = annotate(task=manual_condition("寻找目标并协作确认", "red", role_mode="unassigned"),
+                                          rgb_capture=capture, label_capture=capture,
+                                          instance_labels=raster.object_labels, label_to_object=labels)
+                    boxes = {key: obj.visible_bbox for key, obj in annotation.frame.objects.items()}
+                else:
+                    findings = visible_components(raster.object_labels)
+                    boxes = {key: obj["bbox"] for key, obj in findings.items()}
                 background = int(np.count_nonzero(raster.object_labels == 100))
                 if background < 16:
                     raise ValueError("Rendered building missing from instance raster")
                 pixels = {identity: int(np.count_nonzero(raster.object_labels == label))
-                          for label, identity in LABELS.items() if identity}
+                          for label, identity in labels.items() if identity}
                 rgb = raster.rgb.astype(np.int16)
-                for label, channel in ((11, 0), (22, 2)):
+                colors = [(11, "red"), (22, "blue")] if industrial is None else [(11 + 11 * i, c.color) for i, c in enumerate(industrial)]
+                for label, color in colors:
                     if np.count_nonzero(raster.object_labels == label) < 16:
                         continue
-                    other = [c for c in range(3) if c != channel]
-                    support = ((raster.object_labels == label) & (rgb[:, :, channel] > rgb[:, :, other[0]] + 30)
-                               & (rgb[:, :, channel] > rgb[:, :, other[1]] + 30))
+                    support = (raster.object_labels == label) & color_support(rgb, color)
                     if int(support.sum()) < 8:
                         raise ValueError("RGB color support disagrees with labels")
                 row[name] = {"size": [width, height], "background_pixels": background, "target_pixels": pixels,
-                             "visible_boxes": {key: obj.visible_bbox for key, obj in annotation.frame.objects.items()}}
+                             "visible_boxes": boxes}
             result["agents"][agent].append(row)
             if stamp == stamps[0]:
                 PILImage.fromarray(pair.rgb).save(folder / f"{agent}_rgb.png")
@@ -99,7 +110,7 @@ def inspect_controls(directory, package):
     from .subt_urban_geometry import load_triangles, segment_hits
     directory = Path(directory)
     triangles = load_triangles(package)
-    normalized, tables, cases = [], [], {}
+    normalized, tables, cases, target_tables = [], [], {}, []
     sheet = PILImage.new("RGB", (1024, len(CAMERAS) * 408), "white")
     for index, case in enumerate(CAMERAS):
         folder = directory / case
@@ -108,9 +119,13 @@ def inspect_controls(directory, package):
         contract = summary["scene_resources"]
         if contract["subt"] != verify(package) or contract["case"] != case or contract["role_assignment"] is not None:
             raise ValueError("Unexpected scene provenance or fixed roles")
-        tables.append((contract["subt"], contract["cameras"]))
+        tables.append((contract["subt"], contract["cameras"], contract.get("industrial_targets")))
+        targets = contract["private_targets_enu"]
+        target_tables.append(targets)
+        if contract.get("industrial_targets") is not None and targets != {k: list(v) for k, v in POSITIONS.items()}:
+            raise ValueError("Unexpected industrial target placement")
         root = ET.parse(folder / "world.sdf").getroot()
-        for identity, xyz in TARGETS.items():
+        for identity, xyz in targets.items():
             pose = tuple(map(float, root.findtext(f"world/model[@name='{identity}']/pose").split()))
             if pose != (*xyz, 0., 0., 0.):
                 raise ValueError("Unexpected private target pose")
@@ -125,7 +140,8 @@ def inspect_controls(directory, package):
         for col, agent in enumerate(("uav_0", "uav_1")):
             sheet.paste(PILImage.open(folder / f"{agent}_rgb.png").resize((512, 384)), (col * 512, index * 408 + 24))
             ImageDraw.Draw(sheet).text((col * 512 + 8, index * 408 + 6), f"{case} / {agent} - static QA", fill="black")
-    if len(set(normalized)) != 1 or any(t != tables[0] for t in tables):
+    if (len(set(normalized)) != 1 or any(t != tables[0] for t in tables)
+            or any(t != target_tables[0] for t in target_tables)):
         raise ValueError("View controls altered geometry, targets or sensors")
     rays = {}
     for case in ("hidden", "revealed"):
@@ -133,7 +149,7 @@ def inspect_controls(directory, package):
         for index, pose in enumerate(CAMERAS[case]):
             agent = f"uav_{index}"
             rays[case][agent] = {}
-            for identity, target in TARGETS.items():
+            for identity, target in target_tables[0].items():
                 hits = segment_hits(triangles, pose[:3], target)
                 rays[case][agent][identity] = len(hits)
                 delta = np.asarray(target) - pose[:3]
@@ -163,6 +179,8 @@ def main():
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--inspect-only", action="store_true")
     parser.add_argument("--timeout-s", type=float, default=60.)
+    parser.add_argument("--target-a", type=parse_component, default=parse_component("red:sphere"))
+    parser.add_argument("--target-b", type=parse_component, default=parse_component("blue:cube"))
     args = parser.parse_args()
     if not args.inspect_only:
         if args.models is None:
@@ -170,7 +188,7 @@ def main():
         from .annotation_probe import run
         args.output_dir.mkdir(parents=True, exist_ok=False)
         for case in CAMERAS:
-            tree, contract = scene(args.package, args.models, case=case)
+            tree, contract = scene(args.package, args.models, case=case, target_components=(args.target_a, args.target_b))
             run(args.output_dir / case, args.timeout_s, case,
                 prepared_scene=(tree, contract["camera_pairs"], contract))
             inspect_capture(args.output_dir / case)

@@ -41,6 +41,35 @@ cd /mnt/d/AeroWAM
 
 验收额外检查：Gazebo 日志无资源加载错误、建筑标签确实出现、可见目标的 RGB 有对应颜色支持、四组场景只改相机位姿。隐藏视角目标仍在前方视场内，建筑碰撞三角形截断中心视线；墙后中心视线不再被截断，目标有有效框。它们是独立静态视角，不是运动轨迹或记忆实验。
 
+## 可替换、可移动的工业标靶
+
+场景中的旧彩色条纹球/方块已替换为哑光工业目标：独立支架承载可替换的球、方块或圆柱组件，目标材质为高粗糙度、非金属，不带条纹、文字、AprilTag 或自发光。默认组合为红球和蓝方块。支持颜色 `red / blue / green / yellow`，形状 `sphere / cube / cylinder`；外观与私有实例标签相互独立，标签只用于环境检查和裁判，不送入策略。
+
+在预览命令后添加 `--target-a COLOR:SHAPE` 或 `--target-b COLOR:SHAPE` 可替换组件，例如：
+
+```bash
+/usr/bin/python3 -B -u -m benchmark.px4_gazebo.model_handoff.subt_urban preview \
+  --package /mnt/d/AeroWAM-data/external_scenes/subt_urban_pinned_v2 \
+  --models /mnt/d/AeroWAM-data/annotation_models_v1 \
+  --target-a green:cylinder --target-b yellow:sphere \
+  --output-dir "/mnt/d/AeroWAM-data/subt_custom_targets_$(date +%Y%m%d_%H%M%S)"
+```
+
+`--move-targets` 启用两个目标沿各自有界往返路线移动。它使用 Gazebo 仿真时间和位姿服务驱动的运动学小车，不是物理轮驱动，也不发送 PX4 命令。首次检查建议在 WSL 中跑 18 秒无界面预览：
+
+```bash
+cd /mnt/d/AeroWAM
+/usr/bin/python3 -B -u -m benchmark.px4_gazebo.model_handoff.subt_urban preview \
+  --package /mnt/d/AeroWAM-data/external_scenes/subt_urban_pinned_v2 \
+  --models /mnt/d/AeroWAM-data/annotation_models_v1 \
+  --output-dir "/mnt/d/AeroWAM-data/subt_industrial_preview_$(date +%Y%m%d_%H%M%S)" \
+  --case revealed --move-targets --headless --preview-seconds 18 --target-speed 0.2
+```
+
+预览会在输出目录生成 `preview_summary.json`；目标运动诊断写入 `motion/motion.private.json`，前后渲染拼图为 `motion/rendered_motion.png`。诊断检查位姿变化、相机 RGB 与实例标签的精确时间戳配对、可见目标像素/质心变化、路线边界以及本次启动进程的清理状态。打开 GUI 观察时去掉 `--headless`，保留 `--preview-seconds 18` 限制运行时间。
+
+当前证据证明的是场景目标位姿和双相机渲染随仿真时间变化，**不证明**双无人机策略协作、队友行为变化下的组合迁移、模型成绩或飞行放行。目标接触故障注入还未验证；运动预览也不是接触物理或可飞性验收。
+
 只采集一组可用：
 
 ```bash

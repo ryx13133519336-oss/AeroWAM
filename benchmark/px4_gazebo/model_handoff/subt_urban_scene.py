@@ -11,6 +11,7 @@ import zipfile
 
 from .annotation_models import AIRCRAFT_MODEL, CAMERA_MODEL, LABEL_SENSOR, verify as verify_cameras
 from .warehouse_scene import local_resource, sha256
+from .industrial_targets import POSITIONS, components, install, instrument_contacts, fingerprint
 
 SCHEMA = "aerowam-subt-urban/1-draft"
 WORLD = "aerowam_subt_urban"
@@ -34,7 +35,7 @@ CAMERAS = {
     "revealed": ((12., -8., 2., 0., 0., 2.90), (12., -6., 2., 0., 0., -2.90)),
     "upper": ((0., 0., 12., 0., 0., 0.), (10., -10., 12., 0., 0., 2.3)),
 }
-TARGETS = {"probe_red": (8., -8., 2.), "probe_blue": (8., -6., 2.)}
+TARGETS = POSITIONS
 SPAWNS = ((0., -2., .15, 0., 0., 0.), (0., 2., .15, 0., 0., 0.))
 
 
@@ -171,21 +172,22 @@ def model_copy(package, key, name):
     return model
 
 
-def scene(package, models, *, case="overview", aircraft=False):
+def scene(package, models, *, case="overview", aircraft=False, target_components=None):
     """Returns tree and private contract. Does not start processes or policy."""
     if case not in CAMERAS:
         raise ValueError("Unknown SubT diagnostic view")
+    target_components = components(target_components)
     manifest, cameras = verify(package), verify_cameras(Path(models))
     tree = ET.parse(Path(__file__).with_name("annotation_probe.sdf"))
     world = tree.getroot().find("world")
     world.set("name", WORLD)
     for key in ("probe_wall", "probe_camera"):
         world.remove(world.find(f"model[@name='{key}']"))
-    from .search_pilot_scene import _search_objects
-    _search_objects(world)
-    for key, xyz in TARGETS.items():
-        world.find(f"model[@name='{key}']/pose").text = " ".join(map(str, (*xyz, 0, 0, 0)))
+    target_config = install(world, target_components)
     world.append(model_copy(package, "urban_2_story", "subt_two_story"))
+    contacts = instrument_contacts(world)
+    ET.SubElement(world, "plugin", filename="gz-sim-user-commands-system", name="gz::sim::systems::UserCommands")
+    ET.SubElement(world, "plugin", filename="gz-sim-contact-system", name="gz::sim::systems::Contact")
     world.find("scene/ambient").text = "0.35 0.35 0.35 1"
     # Controlled neutral fill lights, not claimed to reproduce SubT darkness.
     for index, xyz in enumerate(((0, 0, 8), (10, -10, 8), (-10, 10, 8), (0, 0, 18), (10, -10, 18), (-10, 10, 18))):
@@ -205,7 +207,7 @@ def scene(package, models, *, case="overview", aircraft=False):
     ET.SubElement(gui, "plugin", filename="CameraTracking", name="Camera Tracking")
     pairs = []
     if aircraft:
-        for filename, name in (("user-commands", "UserCommands"), ("contact", "Contact"), ("imu", "Imu"),
+        for filename, name in (("imu", "Imu"),
                                ("air-pressure", "AirPressure"), ("navsat", "NavSat"), ("magnetometer", "Magnetometer")):
             ET.SubElement(world, "plugin", filename=f"gz-sim-{filename}-system", name=f"gz::sim::systems::{name}")
         world.find("physics/max_step_size").text = ".004"
@@ -234,6 +236,8 @@ def scene(package, models, *, case="overview", aircraft=False):
                   "camera_pairs": pairs, "camera_poses_enu": None if aircraft else CAMERAS[case],
                   "aircraft_spawn_poses_enu": SPAWNS if aircraft else None,
                   "private_targets_enu": TARGETS, "role_assignment": None, "flight_admitted": False,
+                  "industrial_targets": target_config, "target_config_sha256": fingerprint(target_components),
+                  "contact_sensors": contacts,
                   "policy_evaluated": False, "layout": "single_complete_two_story_tile",
                   "case": case, "collision_meshes": 1, "lighting": "declared_neutral_fill",
                   "readiness": "disarmed_integration_candidate" if aircraft else "static_render_candidate",

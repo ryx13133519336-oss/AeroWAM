@@ -2,6 +2,8 @@
 
 更新时间：2026-10-21
 
+最新下行首轮已结束：红球 4/4 通过、蓝方块 0/4，总覆盖 4/8。WSL 独立复查蓝色失败均在遮挡边缘第 101/117 帧，掩码 17–19 像素但蓝色支持 0、最低要求 2。新采集改显式 JPEG 4:4:4/q100、metadata 记录编码版本，inspect 核对实际 subsampling；颜色和可见性阈值不变，禁止旧 JPEG 转码后充当原始证据。Windows 28+7+16、WSL 28+16 离线测试通过，真实新采集尚待用户运行。重新执行原下行 batch 命令会跳过红球四格，为蓝色新建 attempt002。新旧编码混合是额外限制，冻结评估输出编码版本；正式受控比较需统一编码版本。共享工作区另有其他对话修改的 leaderboard.html，不纳入本次提交。
+
 最新实测：开发集已独立复核 8/8、1,888 双机样本；用户已完成探索训练和独立 audit，checkpoint 为 `D:\AeroWAM-data\subt_fixedcomm_shared_event_20261021_161727`，保持冻结。单条下行 macro F1=0.39493，found/confirm 未命中；55 次 request 只有 1 次标签匹配。RGB RMSE=0.03681，差于 persistence=0.01797；补充诊断与单独重算位于数据盘 `subt_frozen_single_diagnostic_20261021_v1.json` 及 `.audit.json`。不根据留出结果调参。新增 `subt_handoff_frozen_eval.py` 待下行 8 格审计齐全后只读评估固定权重，再单独 audit；具体命令见 `SUBT_NEXT_RUN_CN.md`。
 
 下行采集中蓝方块已有颜色审计失败：同一 JPEG 在 WSL libjpeg 6.2 与 Windows Pillow 12/libjpeg 9 的支持像素可能不同。有 `batch_audit_error.txt` 的目录保持排除，禁止换平台覆盖审计。现有阈值未放宽，错误信息已增加帧号、agent、支持计数和 JPEG 版本。失败目录保留，尚未完成采集修复或全矩阵实测。新的训练/回放/批量和冻结评估入口拒绝已知失败标记。

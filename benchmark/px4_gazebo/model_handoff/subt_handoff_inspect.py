@@ -141,6 +141,11 @@ def inspect(root, *, component=None, delay_s=None):
             image_hashes[path.relative_to(root).as_posix()]=sha256(path)
             with Image.open(path) as frame:
                 if frame.size!=(256,256) or frame.mode!='RGB' or frame.format!='JPEG':raise ValueError('JPEG format mismatch')
+                if metadata.get('rgb_storage') is not None:
+                    from .subt_handoff_collect import RGB_STORAGE
+                    from PIL.JpegImagePlugin import get_sampling
+                    if metadata['rgb_storage']!=RGB_STORAGE or get_sampling(frame)!=0:
+                        raise ValueError('Declared JPEG 4:4:4 storage contract mismatch')
                 rgb=np.asarray(frame)
             label_path=root/f'private/{i:05d}_{agent}_labels.png'
             image_hashes[label_path.relative_to(root).as_posix()]=sha256(label_path)

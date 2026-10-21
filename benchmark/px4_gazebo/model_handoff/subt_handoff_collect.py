@@ -28,6 +28,19 @@ from .warehouse_scene import sha256
 
 NAMES = ("handoff_target", "handoff_carrier", "annotation_camera_0", "annotation_camera_1")
 
+# Apply identically to every target, split and identity. Do not use a private
+# target mask to enhance pixels or alter the independent color thresholds.
+RGB_STORAGE = {"version": "jpeg_rgb_444_q100_v1", "format": "JPEG",
+               "quality": 100, "subsampling": 0,
+               "lossless": False, "target_mask_used_for_encoding": False}
+
+
+def save_public_rgb(rgb, path):
+    """Preserve chroma at small occlusion edges; never rewrite old captures."""
+    from PIL import Image
+    Image.fromarray(rgb).save(path, format="JPEG", quality=RGB_STORAGE["quality"],
+                              subsampling=RGB_STORAGE["subsampling"])
+
 
 def write_json(path, value):
     Path(path).write_text(json.dumps(value, indent=2, allow_nan=False), encoding="utf8")
@@ -203,6 +216,7 @@ def collect(package,models,output,*,component,speed=.3,swapped=False,teammate="n
     metadata={"schema":summary["schema"],"instruction":f"Track the {component.color} {component.shape} across floors; hand off the same target and confirm after your teammate loses sight.",
               "split":split,"route_id":route_id,"scene_family":"subt_urban_2_story_stair_v1",
               "role_assignment":None,"expert_is_privileged":True,"px4_started":False,
+              "rgb_storage":RGB_STORAGE,
               "observation_fields":["rgb","proprioception","messages"],
               "proprioception_source":"ideal_camera_proxy_pose_not_PX4_odometry",
               "action_scope":"event_and_oracle_camera_waypoint_not_flight_control",
@@ -315,7 +329,7 @@ def collect(package,models,output,*,component,speed=.3,swapped=False,teammate="n
                             visible[agent]=findings["bbox"] is not None
                             annotations[agent]=findings
                             relative=f"images/{index:05d}_{agent}.jpg"
-                            PILImage.fromarray(reduced.rgb).save(output/"public"/relative,quality=95)
+                            save_public_rgb(reduced.rgb,output/"public"/relative)
                             paths[agent]=relative
                             hashes[agent]=sha256(output/"public"/relative)
                             PILImage.fromarray(reduced.object_labels).save(output/f"private/{index:05d}_{agent}_labels.png")

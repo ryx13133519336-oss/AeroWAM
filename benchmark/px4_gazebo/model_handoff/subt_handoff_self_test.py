@@ -296,6 +296,23 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(support,3)
         self.assertGreaterEqual(support,max(1,int(3*.15)))
 
+    def test_public_jpeg_preserves_tiny_blue_chroma_without_masks(self):
+        from PIL import Image
+        from PIL.JpegImagePlugin import get_sampling
+        from .subt_handoff_collect import save_public_rgb, RGB_STORAGE
+        from .industrial_targets import color_support
+        rgb=np.full((256,256,3),80,dtype=np.uint8)
+        rgb[101:108,101]=[40,60,120]
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'frame.jpg'
+            save_public_rgb(rgb,path)
+            with Image.open(path) as frame:
+                self.assertEqual(get_sampling(frame),0)
+                decoded=np.asarray(frame)
+            self.assertTrue(color_support(decoded,'blue')[101:108,101].all())
+        self.assertFalse(RGB_STORAGE['target_mask_used_for_encoding'])
+        self.assertFalse(RGB_STORAGE['lossless'])
+
     def test_read_only_inspection_does_not_mask_audit_failures(self):
         with patch.object(inspection,'inspect',side_effect=ValueError('bad digest')), \
              patch.object(inspection.Path,'write_text') as write:

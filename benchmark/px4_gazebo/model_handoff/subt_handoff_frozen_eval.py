@@ -97,6 +97,9 @@ def calculate(policy, predictor, episodes):
             "next_observation": prediction_metrics(predictor, [episode]),
             "persistence": prediction_metrics(Persistence(), [episode])})
     return {"episodes": len(episodes),
+            "rgb_storage_versions": sorted({json.loads((e["root"] / "public/metadata.json").read_text(
+                encoding="utf8")).get("rgb_storage", {}).get("version", "legacy_jpeg_q95_default_subsampling")
+                for e in episodes}),
             "event_policy": event_diagnostics(policy, episodes),
             "next_observation": prediction_metrics(predictor, episodes),
             "persistence": prediction_metrics(Persistence(), episodes),
@@ -137,6 +140,7 @@ def evaluate(run_dir, test_root, extra, output):
             "extra_test_episodes": [str(Path(p).resolve()) for p in extra],
             "checkpoint_refitted": False, "thresholds_tuned_on_test": False,
             "scope": "eight direction-held-out cells of one scene family; one episode per cell",
+            "encoding_caveat": "Retry captures may use JPEG 4:4:4 q100 while older captures and training use q95/default subsampling; this is not a controlled codec comparison",
             "teacher_forced_recorded_messages": True, **BOUNDARIES}
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)

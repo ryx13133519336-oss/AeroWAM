@@ -99,7 +99,7 @@ proxy_run_dir="/mnt/d/AeroWAM-data/subt_proxy_checkpoint_$(date +%Y%m%d_%H%M%S)"
   --run-dir "$proxy_run_dir" --output "${proxy_run_dir}.audit.json"
 ```
 
-预期是 `status=complete`、动作服务请求全部成功、独立审计通过、`proxy_event_success=false`。这条测试证明冻结 checkpoint 已进入实时请求链；适配器只输出 hold 动作并对无框事件 abstain，不能证明 handoff 成功或世界模型有效。若 WSL 无法连接 `127.0.0.1:8765`，停止代理并把连接错误发来，不要改成任意公网地址。
+2026-10-21 已完成该 smoke：`D:\AeroWAM-data\subt_proxy_checkpoint_20261021_192240`，`status=complete`、`model_action_services_accepted=11`、`samples=11`、`owned_processes_stopped=true`、`cleanup_errors=[]`，独立审计 `passed=true`（`frames_verified=11`、`model_actions_traced=11`）。`proxy_event_success=false` 是预期结果：适配器只输出 hold 动作并对无框事件 abstain。该测试证明冻结 checkpoint 已进入实时请求链；不能证明 handoff 成功、世界模型有效或 PX4 飞行。后续更换 checkpoint、模型或任务时仍需重新跑同一审计；若 WSL 无法连接 `127.0.0.1:8765`，停止代理并把连接错误发来，不要改成任意公网地址。
 
 ## 4. 开发集 8 格全部通过后训练探索性基线
 

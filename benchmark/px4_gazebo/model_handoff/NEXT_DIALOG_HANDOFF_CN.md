@@ -8,7 +8,7 @@
 
 下行采集中蓝方块已有颜色审计失败：同一 JPEG 在 WSL libjpeg 6.2 与 Windows Pillow 12/libjpeg 9 的支持像素可能不同。有 `batch_audit_error.txt` 的目录保持排除，禁止换平台覆盖审计。现有阈值未放宽，错误信息已增加帧号、agent、支持计数和 JPEG 版本。失败目录保留，尚未完成采集修复或全矩阵实测。新的训练/回放/批量和冻结评估入口拒绝已知失败标记。
 
-最新进度：下行 8/8 已通过独立审计。真实 Gazebo 代理 hold smoke 也已通过：`D:\AeroWAM-data\subt_proxy_hold_20261021_190821`，11 帧、11 次动作服务请求、清理错误为空；仅证明实时 core/代理动作接口，不是 PX4 飞行、模型 handoff 成功或榜单成绩。
+最新进度：下行 8/8 已通过独立审计。真实 Gazebo 代理 hold smoke 也已通过：`D:\AeroWAM-data\subt_proxy_hold_20261021_190821`，11 帧、11 次动作服务请求、清理错误为空；仅证明实时 core/代理动作接口，不是 PX4 飞行、模型 handoff 成功或榜单成绩。随后冻结事件头 checkpoint 已通过跨 Windows/WSL 的同类 5 秒 smoke：`D:\AeroWAM-data\subt_proxy_checkpoint_20261021_192240`，独立审计验证 11 帧和 11 次模型动作请求；该适配器仍只输出 hold 动作并 abstain grounded events，因此 `proxy_event_success=false`、`flight_admitted=false`、`formal_score=false`。
 
 当前用户约束：暂不研究通信影响，所有新采集固定消息延迟 0.5 s。当前开发计划为目标外观 × 身份置换 × 队友轨迹的 8 格；旧 16 格计划及 2 s 数据保留作历史证据，不用于本阶段条件覆盖。长时采集由用户在 WSL 执行，助手不自动启动或持续等待。
 

@@ -101,6 +101,25 @@ proxy_run_dir="/mnt/d/AeroWAM-data/subt_proxy_checkpoint_$(date +%Y%m%d_%H%M%S)"
 
 2026-10-21 已完成该 smoke：`D:\AeroWAM-data\subt_proxy_checkpoint_20261021_192240`，`status=complete`、`model_action_services_accepted=11`、`samples=11`、`owned_processes_stopped=true`、`cleanup_errors=[]`，独立审计 `passed=true`（`frames_verified=11`、`model_actions_traced=11`）。`proxy_event_success=false` 是预期结果：适配器只输出 hold 动作并对无框事件 abstain。该测试证明冻结 checkpoint 已进入实时请求链；不能证明 handoff 成功、世界模型有效或 PX4 飞行。后续更换 checkpoint、模型或任务时仍需重新跑同一审计；若 WSL 无法连接 `127.0.0.1:8765`，停止代理并把连接错误发来，不要改成任意公网地址。
 
+## 3b. SubT PX4 只读控制链检查
+
+启动检查已经证明 SubT 资源、双机相机和 PX4 遥测可用，但 `flight_ready=false`。在接入真实动作前，先运行下面的显式控制链检查。它只验证六个逐机控制 writer 的匹配，并发送每机一条 `command=400` 的未解锁 disarm 请求；不发送 offboard、轨迹、解锁或起飞命令。
+
+```bash
+cd /mnt/d/AeroWAM
+source /opt/ros/humble/setup.bash
+source /home/ryx/px4_ros2_ws/install/setup.bash
+/usr/bin/python3 -B -m benchmark.px4_gazebo.model_handoff.subt_urban startup \
+  --package /mnt/d/AeroWAM-data/external_scenes/subt_urban_pinned_v2 \
+  --models /mnt/d/AeroWAM-data/annotation_models_v1 \
+  --px4-root /home/ryx/PX4-Autopilot \
+  --agent /mnt/d/AeroWAM-data/tools/microxrce_agent_v242_humble/MicroXRCEAgent \
+  --ros-domain-id 83 --timeout-s 120 --control-link-check \
+  --output-dir "/mnt/d/AeroWAM-data/subt_startup_control_$(date +%Y%m%d_%H%M%S)"
+```
+
+准入前应同时看到 `startup_passed=true`、`control_link_verified=true`、两条新鲜 `result=0` disarm ACK、`motion_commands_sent=0` 和 `owned_processes_stopped=true`。失败目录必须保留，不能放宽超时或把启动检查写成飞行成绩。即使通过，`flight_admitted=false` 仍保持不变。
+
 ## 4. 开发集 8 格全部通过后训练探索性基线
 
 以下在 Windows PowerShell 运行，使用已确认安装 scikit-learn 的 Windows Python。--train-root 会重新独立核验数据、为每格选择一条通过的 episode；不足 8 格就报错，不训练。测试使用独立目录的红球下行 episode，不加入训练，也不作为 checkpoint 选择依据。

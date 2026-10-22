@@ -64,7 +64,7 @@ def constant_velocity_predictions(record: Any) -> list[dict[str, Any]]:
         hidden = current is None
         horizons: dict[str, dict[str, Any]] = {}
         for horizon in HORIZONS_S:
-            predicted_y = y + velocity * horizon
+            predicted_y = y + velocity * ((item.timestamp_ns-stamp)/1e9 + horizon)
             # Hidden periods are intentionally less certain than grounded
             # tracks; this is a useful calibration baseline, not an oracle.
             std = 0.65 if hidden else max(0.18, 0.25 + 0.08 * horizon)
@@ -115,7 +115,7 @@ def run_baseline_suite(*, episodes_per_split: int = 2, seed: int = 20261021) -> 
         by_split[split] = _aggregate_scores(selected)
     return {
         "schema": "aerowam-warehouse-v2-baseline-report/1",
-        "method_id": "constant_velocity_public_only_v1",
+        "method_id": "constant_velocity_public_only_v2",
         "task_id": "warehouse_coop_prediction",
         "scene_id": "aws_warehouse_handoff_v2",
         "episodes_per_split": episodes_per_split,
@@ -123,7 +123,9 @@ def run_baseline_suite(*, episodes_per_split: int = 2, seed: int = 20261021) -> 
         "splits": by_split,
         "model_score_eligible": False,
         "flight_verified": False,
-        "limitations": ["synthetic_kinematics", "public_only_baseline", "no_px4_flight", "not_a_leaderboard_result"],
+        "limitations": ["synthetic_kinematics", "public_only_baseline", "no_px4_flight", "not_a_leaderboard_result",
+                        "centralized_joint_views_not_decentralized_communication_evaluation",
+                        "five_fixed_condition_tuples_not_full_family_sampling", "no_rgb_assets"],
         "episodes": rows,
     }
 

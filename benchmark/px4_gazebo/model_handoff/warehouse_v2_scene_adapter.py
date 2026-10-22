@@ -9,15 +9,16 @@ is a model score or flight result.
 from __future__ import annotations
 
 import base64
-from dataclasses import asdict
+from copy import deepcopy
 from typing import Any, Mapping
 
 from .core.model_io import ModelInput
 from .protocol import AGENT_IDS, ModelObservation, assert_truth_free
+from .language_tasks import TargetReport
 from .warehouse_v2_task import HORIZONS_S, SCENE, TASK, _instruction
 
 
-ADAPTER_ID = "warehouse_v2_live_scene_adapter_v1"
+ADAPTER_ID = "warehouse_v2_live_scene_adapter_v2"
 
 
 def to_model_input(observation: ModelObservation, *, task_context: Mapping[str, Any] | None = None) -> ModelInput:
@@ -32,6 +33,19 @@ def to_model_input(observation: ModelObservation, *, task_context: Mapping[str, 
         raise TypeError("a validated ModelObservation is required")
     wire = observation.to_wire(include_images=True)
     assert_truth_free(wire)
+    stamps = [observation.timestamp_ns, *observation.image_timestamp_ns.values()]
+    if any(type(stamp) is not int or stamp < 0 for stamp in stamps):
+        raise ValueError("nonnegative integer capture timestamps required")
+    if any(stamp > observation.timestamp_ns for stamp in observation.image_timestamp_ns.values()):
+        raise ValueError("future camera exposure cannot enter current ModelInput")
+    # Validate direct dataclass inputs as strictly as TCP packets. All history
+    # is already delivered by the trusted runtime; timestamps alone cannot
+    # certify network receipt, so this adapter grants no audit/score flags.
+    ModelObservation.from_wire(wire)
+    for message in observation.message_history:
+        report = TargetReport.from_wire(message)
+        if report.image_timestamp_ns >= min(observation.image_timestamp_ns.values()):
+            raise ValueError("peer claim must precede both current exposures")
     context = {
         "role_mode": "unassigned",
         "prediction_horizons_s": list(HORIZONS_S),
@@ -42,18 +56,24 @@ def to_model_input(observation: ModelObservation, *, task_context: Mapping[str, 
     }
     if task_context is not None:
         assert_truth_free(task_context, "task_context")
-        if task_context.get("role_assignment") is not None:
-            raise ValueError("role_assignment must remain null")
-        context.update(dict(task_context))
-    context["role_mode"] = "unassigned"
-    context.pop("role_assignment", None)
+        if set(task_context)-{'role_assignment', 'role_mode', 'prediction_horizons_s', 'message_budget'}:
+            raise ValueError("unknown or private task context field")
+        if task_context.get("role_assignment") is not None or task_context.get('role_mode', 'unassigned') != 'unassigned':
+            raise ValueError("roles must remain unassigned")
+        horizons = task_context.get('prediction_horizons_s', list(HORIZONS_S))
+        if list(horizons) != list(HORIZONS_S):
+            raise ValueError("task prediction horizons cannot be overridden")
+        budget = task_context.get('message_budget', 8)
+        if type(budget) is not int or not 0 <= budget <= 8:
+            raise ValueError("integer message budget in 0..8 required")
+        context['message_budget'] = budget
     observations = {}
     for agent in AGENT_IDS:
         observations[agent] = {
             "rgb_jpeg_b64": wire["rgb_jpeg_b64"][agent],
-            "local_state": asdict(observation.states[agent]),
+            "local_state": deepcopy(wire['states'][agent]),
             "image_timestamp_ns": int(observation.image_timestamp_ns[agent]),
-            "peer_messages": list(observation.message_history),
+            "peer_messages": deepcopy(wire['message_history']),
         }
     return ModelInput(
         episode_id=observation.episode_id,
@@ -65,10 +85,15 @@ def to_model_input(observation: ModelObservation, *, task_context: Mapping[str, 
         timestamp_ns=int(observation.timestamp_ns),
         agent_ids=tuple(AGENT_IDS),
         observations=observations,
-        messages=tuple(observation.message_history),
-        action_history=tuple(observation.action_history),
+        messages=tuple(deepcopy(wire['message_history'])),
+        action_history=tuple(deepcopy(wire['action_history'])),
         task_context=context,
     )
+
+
+def from_wire_to_model_input(payload: Mapping[str, Any], *, task_context: Mapping[str, Any] | None = None) -> ModelInput:
+    """Decode one live TCP request and convert it without widening the input."""
+    return to_model_input(ModelObservation.from_wire(payload), task_context=task_context)
 
 
 def decode_rgb(input_item: ModelInput) -> dict[str, bytes]:

@@ -1,30 +1,31 @@
-# Warehouse v2 变更记录（2026-10-21）
+# Warehouse v2 变更记录（更新于 2026-10-22）
 
-本次变更完成了第一个符合“部分可观测 + 队友行为变化 + 预测/协作迁移”主线的 warehouse 任务族离线闭环。
+目前提供任务与评分接口、合成轨迹诊断和真实公开观测的转换函数。尚未完成 SmolVLM 的真实仓库预测/协作闭环，也没有正式榜单成绩或学习迁移结论。
 
-## 版本与接口
+## 同学需要同步的接口变化
 
-- core schema：未修改。`benchmark/px4_gazebo/model_handoff/core/` 不需要迁移。
-- task：`warehouse_coop_prediction`，`task_version=1`。
-- scene：`aws_warehouse_handoff_v2`，`scene_version=2`。
-- 公开输入仍使用 core `ModelInput`；私有 future supervision 和 truth 只给可信 evaluator/训练分支。
-- 新增公开 baseline 报告接口：`aerowam-warehouse-v2-baseline-report/1`。
+- core schema 未修改。
+- task `warehouse_coop_prediction` 的 `task_version` 升到 `2`，evaluator ID 为 `warehouse_coop_prediction_evaluator_v2`。
+- 离线数据集 manifest 升到 `aerowam-warehouse-v2-dataset/3`。`episodes.jsonl` 只有公开索引；`model_inputs.jsonl` 只含公开输入；`private_truth/` 只给可信 evaluator。合成观测 `rgb=null`，明确没有图像，不能送给 VLM 作为真实 RGB。
+- 评分输出升到 `aerowam-warehouse-v2-score/2`。预测必须覆盖全部预期样本和三个 horizon；缺失样本时主要预测指标为 null、交接不能成功。重复/越界样本、非有限数和非法概率被拒绝；无请求的确认也计为错误。评分不再依赖是否导出训练监督。
+- live adapter 是函数 API：`to_model_input(observation, task_context=...)`、`from_wire_to_model_input(payload, task_context=...)` 和 `decode_rgb(item)`，没有 `WarehouseV2SceneAdapter` 类。adapter ID 升到 `warehouse_v2_live_scene_adapter_v2`。上下文只允许固定 horizons、0..8 消息预算和未分配角色；拒绝未来曝光、同帧报告、未知潜变量字段。函数本身不做跨调用的 episode/单调时序审计，这仍由运行时负责。
 
-## 已修改/新增文件
+## 已修复的诊断问题
 
-- `warehouse_v2_task.py`：任务生成、五 split、评分器；修复危险请求判定，使“源机不可见且接收机可见”是安全请求条件；补齐 6 个布局、5 个运动族和 5 个队友行为族。
-- `warehouse_v2_task.py`：数据集导出 schema 升到 `aerowam-warehouse-v2-dataset/2`；公开 `episodes.jsonl` 现在只有 episode index，完整 future supervision 不再随公开索引发布。
-- `warehouse_v2_scene_adapter.py`：新增 `WarehouseV2SceneAdapter`，将现有 `ModelObservation` 公开输入映射到 core `PublicObservation` 和 `ModelInput`；严格检查 episode、时间戳、消息预算和 truth-free 字段。
-- `warehouse_v2_scene_adapter_self_test.py`：新增 adapter 边界回归测试。
-- `warehouse_v2_task_self_test.py`：修复公开边界断言并增加潜变量族回归测试。
-- `warehouse_v2_baseline.py`：只消费公开 `ModelInput` 的 constant-velocity / 保守交接 baseline 和五 split 汇总。
-- `warehouse_v2_baseline_self_test.py`：baseline 和报告产物自测。
-- `WAREHOUSE_COOP_PREDICTION_PROTOCOL_V2_CN.md`：记录当前实现和运行入口。
+加减速轨迹不再在分段边界瞬移，反向分支能够离开盲区；队友延迟使用实际模拟送达队列并保留报告曝光时间；CV baseline 在遮挡期按已经流逝的时间外推。校准误差使用预测类别的置信度。关闭监督时不生成私有未来监督，但可信评分仍可用单独 truth 重放。
 
-## 队友同步
+## 真实仓库执行器变化
 
-请重新下载/同步包含上述文件的仓库版本，并重新生成 v2 数据集（旧 `warehouse_v2_dataset_20261021_v1` 的 `episodes.jsonl` 仍是旧格式，建议删除后重建）。若只想运行现有 core adapter，不需要任何 core schema 迁移；若要运行 warehouse v2，必须同步 `warehouse_v2_task.py`、`warehouse_v2_baseline.py`、`warehouse_v2_scene_adapter.py` 及对应 self-test 和协议/变更记录。
+仓库保留 AWS 背景，采用八个物理遮挡体、南侧可见—双机盲区—北侧可见的移动目标路线。保守的递归 box 证明覆盖整个目标和相机不确定区域；采集要求所有遮挡体的实际根位姿与审计几何一致，缺失、重复、移位或旋转均拒绝。像素证据与完整遮挡证明冲突时拒绝。仓库 handoff evaluator v2 允许来源机先跟踪/请求、接收机在来源机被物理遮挡后重现目标并接受，再保持至少一秒有效报告；旧的共享可见接受仍支持。
 
-## 证据边界
+所有旧场景哈希的 clearance/preflight/contact/flight 准入均需重新生成。不得用旧的 v29/v30 归档授予新布局飞行准入。物理飞行诊断的往返方向移向出生安全区内部，原安全门不变。
 
-`D:\AeroWAM-data\warehouse_v2_dataset_20261021_v1` 和 `warehouse_v2_baseline_20261021_v1` 是可查看的离线 synthetic 诊断，不能作为 PX4 飞行证据或正式模型榜单成绩。Gazebo/PX4 scene adapter、独立遮挡审计和 SmolVLM 接入仍是下一阶段。
+## 实现范围和证据边界
+
+代码声明了6个布局族、5个运动族和5个队友族，但默认导出只使用五个固定组合；目前布局只是合成可见区间，没有六套经真实 clearance 的 Gazebo 布局。中央 baseline 可以直接读取双机公开视图，不是通信受限的分布式协作实验；队友消息也尚未构成可控的真实队友执行策略。不能据此声称训练或组合迁移有效。
+
+当前数据盘 `warehouse_v2_dataset_20261022_v2`、`warehouse_v2_baseline_20261022_v2` 为合成诊断，`model_score_eligible=false`、`flight_admitted=false`。旧数据和报告保持原样，比较时必须核对 task/dataset/score 版本。
+
+## 同步和检查
+
+同学同步本次发布分支的 v2 Python 文件及本文、协议后重新生成数据；core 不迁移。运行 warehouse v2 三组 self-test 和 `python -m benchmark.px4_gazebo.model_handoff.core.core_self_test`。完整真实执行器另需匹配的仓库场景文件、安全门、WSL 依赖和新准入证据，单独下载 v2 接口不能视为已具备飞行能力。

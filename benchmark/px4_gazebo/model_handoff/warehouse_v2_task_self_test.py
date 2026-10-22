@@ -1,6 +1,8 @@
 """Self-test for the first warehouse v2 cooperation/prediction task."""
 
 import json
+import math
+from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -11,6 +13,7 @@ from .warehouse_v2_task import (
     AGENTS, HORIZONS_S, LAYOUT_FAMILIES, MOTION_FAMILIES, SPLIT_MATRIX,
     TEAMMATE_FAMILIES, TASK, SCENE, export_dataset,
     generate_episode, model_inputs, score_predictions,
+    _motion,
 )
 
 
@@ -112,9 +115,58 @@ class WarehouseV2TaskTests(unittest.TestCase):
             self.assertEqual(len(public_episode_lines), 5)
             self.assertNotIn("position_enu", "\n".join(public_episode_lines))
             self.assertNotIn("future_observation_supervision", "\n".join(public_episode_lines))
-            self.assertEqual(manifest["schema"], "aerowam-warehouse-v2-dataset/2")
+            self.assertEqual(manifest["schema"], "aerowam-warehouse-v2-dataset/3")
+            self.assertFalse(manifest['rgb_available'])
             self.assertEqual(TASK.task_id, "warehouse_coop_prediction")
             self.assertEqual(SCENE.scene_id, "aws_warehouse_handoff_v2")
+
+    def test_motion_is_continuous_bounded_and_branches_exit_the_blind_interval(self):
+        for family in MOTION_FAMILIES:
+            for branch in (-1, 1):
+                last = _motion(0., family, branch)[0]
+                for index in range(1, 3201):
+                    t = index*.01
+                    y, velocity = _motion(t, family, branch)
+                    self.assertLessEqual(abs(y-last), .002401, (family, branch, t))
+                    self.assertTrue(math.isfinite(velocity))
+                    self.assertLessEqual(abs(y), 1.751)
+                    last = y
+        self.assertLess(_motion(20., 'branch', -1)[0], -.78)
+        self.assertGreater(_motion(20., 'branch', 1)[0], .72)
+
+    def test_scoring_coverage_does_not_depend_on_training_supervision(self):
+        from .warehouse_v2_baseline import constant_velocity_predictions
+        record, truth = generate_episode(19, with_supervision=False)
+        self.assertFalse(record.task_supervision)
+        self.assertFalse(record.future_observation_supervision)
+        predictions = constant_velocity_predictions(record)
+        self.assertTrue(score_predictions(record, truth, predictions)['prediction_coverage_complete'])
+        incomplete = score_predictions(record, truth, predictions[:-1])
+        self.assertFalse(incomplete['prediction_coverage_complete'])
+        self.assertIsNone(incomplete['prediction_nll'])
+        self.assertFalse(incomplete['handoff_success'])
+        for malformed in (predictions+[predictions[0]], [dict(predictions[0], sample_index=-1)]):
+            with self.assertRaises(ValueError): score_predictions(record, truth, malformed)
+        for value in (math.nan, math.inf, -1., True):
+            malformed = deepcopy(predictions)
+            malformed[0]['horizons']['0.5']['visible_probability']['uav_0'] = value
+            with self.assertRaises(ValueError): score_predictions(record, truth, malformed)
+        malformed = deepcopy(predictions)
+        malformed[0]['action'] = {'event': 'confirm', 'agent_id': 'uav_0'}
+        result = score_predictions(record, truth, malformed)
+        self.assertGreater(result['invalid_confirmation_count'], 0)
+        self.assertFalse(result['handoff_success'])
+
+    def test_delayed_teammate_reports_have_real_capture_to_delivery_lag(self):
+        for split, lag in (('seen', 500_000_000), ('new_teammate', 1_500_000_000)):
+            record, truth = generate_episode(17, split)
+            self.assertTrue(record.messages)
+            for message in record.messages:
+                self.assertEqual(message.timestamp_ns-message.payload['image_timestamp_ns'], lag)
+            for item in model_inputs(record):
+                for message in item.messages:
+                    self.assertLess(message['payload']['image_timestamp_ns'], item.timestamp_ns)
+                    self.assertLessEqual(message['timestamp_ns'], item.timestamp_ns)
 
 
 if __name__ == "__main__":

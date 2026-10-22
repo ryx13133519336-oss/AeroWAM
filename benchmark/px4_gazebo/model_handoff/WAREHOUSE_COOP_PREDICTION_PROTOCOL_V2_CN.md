@@ -6,7 +6,7 @@
 2. 根据队友的实际行为选择何时请求、确认或等待；
 3. 把这两种能力迁移到没有见过的布局、运动模式和队友策略。
 
-运行代码在本协议确认前不继续改动。
+用户已确认沿此设计继续实现。下文是目标设计，实际完成范围见末尾，不能把设计要求当成已验证结果。
 
 ## 为什么 v1 证据不够
 
@@ -119,28 +119,37 @@
 
 建议把当前已改的 v1 代码暂存为实验分支，等 v2 任务族确认后再收敛到正式运行入口。
 
-## 当前实现状态（2026-10-21）
+## 当前实现状态（2026-10-22）
 
 仓库已提供第一版可复现的离线任务族和公开输入 baseline：
 
 - `warehouse_v2_task.py`：任务 ID `warehouse_coop_prediction`，场景 ID `aws_warehouse_handoff_v2`，五个固定迁移 split，以及公开输入、私有 truth 和评分器；
 - `warehouse_v2_baseline.py`：只读取 `ModelInput` 的 constant-velocity / 保守交接 baseline；
-- `warehouse_v2_scene_adapter.py`：把已同步的双机公开观测映射到 core `PublicObservation`/`ModelInput`，拒绝真值字段、跨 episode 数据和乱序时间戳；
+- `warehouse_v2_scene_adapter.py`：把已验证的真实 Warehouse `ModelObservation` 公共包转换为 v2 `ModelInput`，保持角色未分配并拒绝私有真值；
+- `warehouse_v2_scene_adapter.py`：函数 `to_model_input` / `from_wire_to_model_input` 转为 `ModelInput`，拒绝未知上下文、未来曝光和同帧报告；跨调用的 episode 和乱序检查由运行时负责；
 - `warehouse_v2_task_self_test.py`、`warehouse_v2_baseline_self_test.py`：任务边界、core roundtrip、评分器和报告回归测试；
 - `warehouse_v2_scene_adapter_self_test.py`：验证 live observation 的公开边界和同步约束；
 - `warehouse_v2_dataset_20261021_v1`：每个 split 两个 episode 的可查看数据样例；
 - `warehouse_v2_baseline_20261021_v1`：五个 split 的 NLL、visibility Brier、校准误差、危险交接率和协作成功率诊断报告。
 
-数据集 manifest 为 `aerowam-warehouse-v2-dataset/2`；公开 `episodes.jsonl` 只有 episode index，公开模型输入在 `model_inputs.jsonl`，私有真值在 `private_truth/`。
+task_version 为 `2`，数据集 manifest 为 `aerowam-warehouse-v2-dataset/3`，评分 schema 为 `aerowam-warehouse-v2-score/2`；公开 `episodes.jsonl` 只有 episode index，公开模型输入在 `model_inputs.jsonl`，私有真值在 `private_truth/`。合成输入的 `rgb=null`，没有图像资源。
+
+当前默认导出为五个固定条件组合，尚未完整随机采样6/5/5族；合成布局只定义可见区间，尚未生成6套真实 Gazebo 布局。中央 baseline 读取双机视图，不能用它验证通信限制、真实队友变化或训练迁移收益。完整二维协方差、事件预测和真实 v2 任务动作执行仍待接入。
 
 运行入口：
 
 ```powershell
 $env:PYTHONPATH='D:\AeroWAM'
 python -m benchmark.px4_gazebo.model_handoff.warehouse_v2_task `
-  --output 'D:\AeroWAM-data\warehouse_v2_dataset_20261021_v1' --episodes-per-split 2
+  --output 'D:\AeroWAM-data\warehouse_v2_dataset_20261022_v2' --episodes-per-split 2
 python -m benchmark.px4_gazebo.model_handoff.warehouse_v2_baseline `
-  --output 'D:\AeroWAM-data\warehouse_v2_baseline_20261021_v1' --episodes-per-split 2
+  --output 'D:\AeroWAM-data\warehouse_v2_baseline_20261022_v2' --episodes-per-split 2
 ```
 
 以上结果仍是 synthetic kinematics，`model_score_eligible=false`、`flight_admitted=false`。接入 Gazebo/PX4 和 SmolVLM 之前，不能把这份报告当作正式榜单成绩。
+
+## 当前真实接入边界
+
+`warehouse_v2_scene_adapter.py` 是真实采集的第一层接口，不是场景运行器。它接收现有 Warehouse 运行时产生的 `aerowam-model-handoff/1` 公共包，转换为相同 Core `ModelInput`；输入只包括双 RGB、各机自己的状态、已送达消息和动作历史。`role_assignment` 保持为空，角色由模型输出和私有 evaluator 从实际观测归因。
+
+它不会把 `warehouse_v2_dataset_20261021_v1` 中的 synthetic RGB 路径当成图像，也不会读取 `private_truth`、目标位姿、遮挡几何、教师标签或队友潜变量。要进行真实 v2 评测，还必须由 Gazebo/PX4 scene adapter 产生带真实 JPEG、实际时间戳和独立场景审计的公开包，再将该公开包送入 SmolVLM；在此之前所有输出仍是诊断，不能进入正式榜单。
